@@ -1,0 +1,344 @@
+# =============================================================================
+# Argo Workflows RBAC Configuration
+# =============================================================================
+# ServiceAccount, Role, and RoleBinding for Argo Workflows.
+# Provides permissions for workflow execution, pod creation, and API access.
+#
+# Apply with: kubectl apply -f k8s/argo-workflows/workflow-rbac.yaml
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# ServiceAccount for Argo Workflows
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo-workflow
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: argo-workflow
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: mlops-automation
+  annotations:
+    # Annotation for workload identity (GKE/EKS)
+    # iam.gke.io/gcp-service-account: argo-workflow@project.iam.gserviceaccount.com
+
+---
+# -----------------------------------------------------------------------------
+# ServiceAccount for Workflow Executor
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: workflow-executor
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: workflow-executor
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: mlops-automation
+
+---
+# -----------------------------------------------------------------------------
+# Role for Argo Workflows
+# -----------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-workflow-role
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: argo-workflow
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: mlops-automation
+rules:
+  # Pod management for workflow steps
+  - apiGroups: [""]
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+
+  # Pod logs for debugging
+  - apiGroups: [""]
+    resources:
+      - pods/log
+    verbs:
+      - get
+      - list
+      - watch
+
+  # Pod exec for workflow steps
+  - apiGroups: [""]
+    resources:
+      - pods/exec
+    verbs:
+      - create
+
+  # Secrets access for credentials
+  - apiGroups: [""]
+    resources:
+      - secrets
+    verbs:
+      - get
+      - list
+      - watch
+
+  # ConfigMaps for configuration
+  - apiGroups: [""]
+    resources:
+      - configmaps
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+
+  # PersistentVolumeClaims for data storage
+  - apiGroups: [""]
+    resources:
+      - persistentvolumeclaims
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - delete
+
+  # Services for networking
+  - apiGroups: [""]
+    resources:
+      - services
+    verbs:
+      - get
+      - list
+      - watch
+
+  # Events for monitoring
+  - apiGroups: [""]
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+
+  # Workflows and workflow templates
+  - apiGroups: ["argoproj.io"]
+    resources:
+      - workflows
+      - workflows/finalizers
+      - workfloweventbindings
+      - workflowtemplates
+      - cronworkflows
+      - clusterworkflowtemplates
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+
+  # Workflow task results
+  - apiGroups: ["argoproj.io"]
+    resources:
+      - workflowtaskresults
+    verbs:
+      - create
+      - patch
+
+  # KServe InferenceServices for model deployment
+  - apiGroups: ["serving.kserve.io"]
+    resources:
+      - inferenceservices
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+
+  # Kubeflow Pipelines
+  - apiGroups: ["kubeflow.org"]
+    resources:
+      - pipelines
+      - experiments
+      - runs
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+
+---
+# -----------------------------------------------------------------------------
+# RoleBinding for Argo Workflows
+# -----------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-workflow-rolebinding
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: argo-workflow
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: mlops-automation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: argo-workflow-role
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow
+    namespace: mlops
+  - kind: ServiceAccount
+    name: workflow-executor
+    namespace: mlops
+
+---
+# -----------------------------------------------------------------------------
+# ClusterRole for cross-namespace access (optional)
+# -----------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: argo-workflow-cluster-role
+  labels:
+    app.kubernetes.io/name: argo-workflow
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: mlops-automation
+rules:
+  # Node metrics for resource scheduling
+  - apiGroups: [""]
+    resources:
+      - nodes
+    verbs:
+      - get
+      - list
+      - watch
+
+  # Namespaces for multi-namespace deployments
+  - apiGroups: [""]
+    resources:
+      - namespaces
+    verbs:
+      - get
+      - list
+
+  # KServe InferenceServices across namespaces
+  - apiGroups: ["serving.kserve.io"]
+    resources:
+      - inferenceservices
+    verbs:
+      - get
+      - list
+      - watch
+
+---
+# -----------------------------------------------------------------------------
+# ClusterRoleBinding for cross-namespace access
+# -----------------------------------------------------------------------------
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: argo-workflow-cluster-rolebinding
+  labels:
+    app.kubernetes.io/name: argo-workflow
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/part-of: mlops-automation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: argo-workflow-cluster-role
+subjects:
+  - kind: ServiceAccount
+    name: argo-workflow
+    namespace: mlops
+
+---
+# -----------------------------------------------------------------------------
+# Secret for Kubeflow API Access
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kubeflow-api-credentials
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: argo-workflow
+    app.kubernetes.io/component: credentials
+    app.kubernetes.io/part-of: mlops-automation
+type: Opaque
+stringData:
+  # Kubeflow Pipelines API endpoint
+  KUBEFLOW_HOST: "http://ml-pipeline.kubeflow.svc.cluster.local:8888"
+  # API token (if using Kubeflow with authentication)
+  KUBEFLOW_TOKEN: ""
+  # MLflow tracking URI
+  MLFLOW_TRACKING_URI: "http://mlflow.mlops.svc.cluster.local:5000"
+
+---
+# -----------------------------------------------------------------------------
+# Secret for Notification Webhooks
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: notification-webhooks
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: argo-workflow
+    app.kubernetes.io/component: credentials
+    app.kubernetes.io/part-of: mlops-automation
+type: Opaque
+stringData:
+  # Slack webhook URL for notifications
+  SLACK_WEBHOOK_URL: "https://hooks.slack.com/services/YOUR/SLACK/WEBHOOK"
+  # Email SMTP credentials (if using email notifications)
+  SMTP_HOST: "smtp.example.com"
+  SMTP_PORT: "587"
+  SMTP_USER: ""
+  SMTP_PASSWORD: ""
+  EMAIL_TO: "ml-team@example.com"
+
+---
+# -----------------------------------------------------------------------------
+# ConfigMap for Workflow Configuration
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: workflow-config
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: argo-workflow
+    app.kubernetes.io/component: config
+    app.kubernetes.io/part-of: mlops-automation
+data:
+  # Retraining thresholds
+  DRIFT_THRESHOLD_PSI: "0.25"
+  DRIFT_THRESHOLD_ERROR_RATE: "0.05"
+
+  # Model comparison thresholds
+  MODEL_IMPROVEMENT_THRESHOLD: "0.02"  # 2% improvement required
+
+  # Canary deployment settings
+  CANARY_TRAFFIC_PERCENT: "10"
+  SHADOW_TEST_DURATION_MINUTES: "60"
+
+  # Pipeline settings
+  PIPELINE_TIMEOUT_MINUTES: "30"
+  DATA_LOOKBACK_DAYS: "30"
+
+  # Retry settings
+  MAX_RETRIES: "3"
+  RETRY_BACKOFF_SECONDS: "30"

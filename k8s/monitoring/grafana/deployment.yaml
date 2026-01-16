@@ -1,0 +1,382 @@
+# =============================================================================
+# Grafana Deployment
+# =============================================================================
+# Deploys Grafana for visualization of ML metrics and dashboards.
+#
+# Apply with: kubectl apply -f k8s/monitoring/grafana/deployment.yaml
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# PersistentVolumeClaim for Grafana data
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: grafana-data
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: monitoring
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+  # storageClassName: standard
+
+---
+# -----------------------------------------------------------------------------
+# Secret for Grafana Admin Credentials
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-admin-credentials
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: auth
+    app.kubernetes.io/part-of: monitoring
+type: Opaque
+stringData:
+  # Change these in production!
+  admin-user: admin
+  admin-password: admin123!  # Use a stronger password in production
+
+---
+# -----------------------------------------------------------------------------
+# ServiceAccount for Grafana
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: grafana
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/part-of: monitoring
+
+---
+# -----------------------------------------------------------------------------
+# Grafana Deployment
+# -----------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: visualization
+    app.kubernetes.io/part-of: monitoring
+    app.kubernetes.io/version: "10.2.0"
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+      app.kubernetes.io/component: visualization
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: grafana
+        app.kubernetes.io/component: visualization
+        app.kubernetes.io/part-of: monitoring
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/metrics"
+    spec:
+      serviceAccountName: grafana
+
+      # Security context
+      securityContext:
+        fsGroup: 472
+        runAsNonRoot: true
+        runAsUser: 472
+
+      # Init container to set permissions
+      initContainers:
+        - name: init-chown-data
+          image: busybox:1.36
+          command:
+            - chown
+            - -R
+            - "472:472"
+            - /var/lib/grafana
+          volumeMounts:
+            - name: grafana-data
+              mountPath: /var/lib/grafana
+          securityContext:
+            runAsNonRoot: false
+            runAsUser: 0
+
+      containers:
+        - name: grafana
+          image: grafana/grafana:10.2.0
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 3000
+              protocol: TCP
+
+          # Environment variables
+          env:
+            - name: GF_SECURITY_ADMIN_USER
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin-credentials
+                  key: admin-user
+            - name: GF_SECURITY_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: grafana-admin-credentials
+                  key: admin-password
+            - name: GF_PATHS_DATA
+              value: /var/lib/grafana
+            - name: GF_PATHS_LOGS
+              value: /var/log/grafana
+            - name: GF_PATHS_PLUGINS
+              value: /var/lib/grafana/plugins
+            - name: GF_PATHS_PROVISIONING
+              value: /etc/grafana/provisioning
+            - name: GF_INSTALL_PLUGINS
+              value: "grafana-piechart-panel,grafana-clock-panel"
+            # SMTP configuration (optional)
+            # - name: GF_SMTP_ENABLED
+            #   value: "true"
+            # - name: GF_SMTP_HOST
+            #   value: "smtp.example.com:587"
+
+          # Resource limits
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+
+          # Volume mounts
+          volumeMounts:
+            - name: grafana-data
+              mountPath: /var/lib/grafana
+            - name: grafana-config
+              mountPath: /etc/grafana/grafana.ini
+              subPath: grafana.ini
+            - name: grafana-datasources
+              mountPath: /etc/grafana/provisioning/datasources/datasources.yaml
+              subPath: datasources.yaml
+            - name: grafana-dashboard-provisioning
+              mountPath: /etc/grafana/provisioning/dashboards/dashboards.yaml
+              subPath: dashboards.yaml
+            - name: grafana-notifiers
+              mountPath: /etc/grafana/provisioning/notifiers/notifiers.yaml
+              subPath: notifiers.yaml
+            - name: grafana-dashboards-ml
+              mountPath: /var/lib/grafana/dashboards/ml-platform
+            - name: grafana-dashboards-infra
+              mountPath: /var/lib/grafana/dashboards/infrastructure
+
+          # Liveness probe
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 10
+
+          # Readiness probe
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          # Security context
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+
+      # Volumes
+      volumes:
+        - name: grafana-data
+          persistentVolumeClaim:
+            claimName: grafana-data
+        - name: grafana-config
+          configMap:
+            name: grafana-config
+        - name: grafana-datasources
+          configMap:
+            name: grafana-datasources
+        - name: grafana-dashboard-provisioning
+          configMap:
+            name: grafana-dashboard-provisioning
+        - name: grafana-notifiers
+          configMap:
+            name: grafana-notifiers
+        - name: grafana-dashboards-ml
+          configMap:
+            name: grafana-dashboards-ml
+            optional: true
+        - name: grafana-dashboards-infra
+          configMap:
+            name: grafana-dashboards-infra
+            optional: true
+
+      # Termination grace period
+      terminationGracePeriodSeconds: 30
+
+      # Node affinity
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: node-type
+                    operator: In
+                    values:
+                      - monitoring
+
+---
+# -----------------------------------------------------------------------------
+# Grafana Service (ClusterIP)
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: visualization
+    app.kubernetes.io/part-of: monitoring
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: visualization
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      protocol: TCP
+
+---
+# -----------------------------------------------------------------------------
+# Grafana Service (NodePort for external access)
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-external
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: visualization
+    app.kubernetes.io/part-of: monitoring
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: visualization
+  ports:
+    - name: http
+      port: 3000
+      targetPort: 3000
+      nodePort: 30300
+      protocol: TCP
+
+---
+# -----------------------------------------------------------------------------
+# Grafana Ingress (optional)
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/part-of: monitoring
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: grafana.example.com  # Change to your domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: grafana
+                port:
+                  number: 3000
+
+---
+# -----------------------------------------------------------------------------
+# PodDisruptionBudget
+# -----------------------------------------------------------------------------
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: grafana-pdb
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/part-of: monitoring
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: grafana
+      app.kubernetes.io/component: visualization
+
+---
+# -----------------------------------------------------------------------------
+# HorizontalPodAutoscaler (optional for high availability)
+# -----------------------------------------------------------------------------
+# Uncomment for HA deployments with shared database backend
+# apiVersion: autoscaling/v2
+# kind: HorizontalPodAutoscaler
+# metadata:
+#   name: grafana-hpa
+#   namespace: mlops
+#   labels:
+#     app.kubernetes.io/name: grafana
+#     app.kubernetes.io/part-of: monitoring
+# spec:
+#   scaleTargetRef:
+#     apiVersion: apps/v1
+#     kind: Deployment
+#     name: grafana
+#   minReplicas: 2
+#   maxReplicas: 3
+#   metrics:
+#     - type: Resource
+#       resource:
+#         name: cpu
+#         target:
+#           type: Utilization
+#           averageUtilization: 80

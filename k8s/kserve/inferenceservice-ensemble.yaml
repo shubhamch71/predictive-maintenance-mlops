@@ -1,0 +1,274 @@
+# =============================================================================
+# KServe InferenceService - Ensemble Model
+# =============================================================================
+# Deploys the ensemble RUL prediction service combining RF, XGBoost, and LSTM.
+#
+# Apply with: kubectl apply -f k8s/kserve/inferenceservice-ensemble.yaml
+#
+# Features:
+# - Auto-scaling based on CPU utilization
+# - Canary deployments support
+# - Request logging
+# - Prometheus metrics
+# =============================================================================
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: rul-ensemble
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: rul-ensemble
+    app.kubernetes.io/component: inference-service
+    app.kubernetes.io/part-of: predictive-maintenance
+    app.kubernetes.io/version: "1.0.0"
+  annotations:
+    # Prometheus scraping
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8000"
+    prometheus.io/path: "/metrics"
+    # Sidecar injection (if using Istio)
+    sidecar.istio.io/inject: "true"
+    # Request logging
+    serving.kserve.io/enable-prometheus-scraping: "true"
+spec:
+  # Predictor specification
+  predictor:
+    # Minimum and maximum replicas for autoscaling
+    minReplicas: 1
+    maxReplicas: 5
+
+    # Concurrent requests per pod
+    containerConcurrency: 10
+
+    # Scale to zero timeout (0 = never scale to zero)
+    scaleTarget: 70
+    scaleMetric: "cpu"
+
+    # Service account for accessing resources
+    serviceAccountName: ml-workload
+
+    # Timeout settings
+    timeout: 60
+
+    # Container specification
+    containers:
+      - name: kserve-container
+        image: gcr.io/predictive-maintenance/pm-serving:latest
+        imagePullPolicy: Always
+
+        ports:
+          - containerPort: 8000
+            protocol: TCP
+            name: http
+
+        # Environment variables
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: "http://mlflow.mlops.svc.cluster.local:5000"
+          - name: MODEL_DIR
+            value: "/models"
+          - name: PRELOAD_MODELS
+            value: "true"
+          - name: LOG_LEVEL
+            value: "INFO"
+          # Model weights for ensemble
+          - name: RF_WEIGHT
+            value: "0.35"
+          - name: XGB_WEIGHT
+            value: "0.40"
+          - name: LSTM_WEIGHT
+            value: "0.25"
+
+        # Resource requests and limits
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "1Gi"
+          limits:
+            cpu: "2"
+            memory: "4Gi"
+
+        # Volume mounts
+        volumeMounts:
+          - name: model-storage
+            mountPath: /models
+            readOnly: true
+
+        # Liveness probe
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+
+        # Readiness probe
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+
+        # Startup probe (for slow model loading)
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 30
+
+        # Security context
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: false
+          capabilities:
+            drop:
+              - ALL
+
+    # Volumes
+    volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: model-registry
+
+    # Node affinity (optional)
+    affinity:
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+                - key: node-type
+                  operator: In
+                  values:
+                    - inference
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: app.kubernetes.io/name
+                    operator: In
+                    values:
+                      - rul-ensemble
+              topologyKey: kubernetes.io/hostname
+
+    # Tolerations (optional)
+    tolerations:
+      - key: "inference"
+        operator: "Equal"
+        value: "true"
+        effect: "NoSchedule"
+
+---
+# =============================================================================
+# HorizontalPodAutoscaler for fine-grained scaling control
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rul-ensemble-hpa
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: rul-ensemble
+    app.kubernetes.io/component: autoscaler
+spec:
+  scaleTargetRef:
+    apiVersion: serving.kserve.io/v1beta1
+    kind: InferenceService
+    name: rul-ensemble
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    # CPU-based scaling
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+    # Memory-based scaling
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+    # Custom metric: requests per second (requires metrics-server)
+    # - type: Pods
+    #   pods:
+    #     metric:
+    #       name: http_requests_per_second
+    #     target:
+    #       type: AverageValue
+    #       averageValue: "100"
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 25
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 15
+        - type: Pods
+          value: 2
+          periodSeconds: 15
+      selectPolicy: Max
+
+---
+# =============================================================================
+# PodDisruptionBudget for high availability
+# =============================================================================
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rul-ensemble-pdb
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: rul-ensemble
+    app.kubernetes.io/component: pdb
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rul-ensemble
+
+---
+# =============================================================================
+# ServiceMonitor for Prometheus (if using prometheus-operator)
+# =============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: rul-ensemble-monitor
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: rul-ensemble
+    app.kubernetes.io/component: monitoring
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rul-ensemble
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 15s
+      scrapeTimeout: 10s
+  namespaceSelector:
+    matchNames:
+      - mlops

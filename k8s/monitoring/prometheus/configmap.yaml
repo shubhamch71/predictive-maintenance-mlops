@@ -1,0 +1,474 @@
+# =============================================================================
+# Prometheus Configuration ConfigMap
+# =============================================================================
+# Contains:
+# - Scrape configurations for all services
+# - Alerting rules for ML-specific metrics
+# - Recording rules for pre-computed metrics
+#
+# Apply with: kubectl apply -f k8s/monitoring/prometheus/configmap.yaml
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/component: config
+    app.kubernetes.io/part-of: monitoring
+data:
+  # ===========================================================================
+  # Main Prometheus Configuration
+  # ===========================================================================
+  prometheus.yml: |
+    # Global configuration
+    global:
+      scrape_interval: 30s
+      evaluation_interval: 30s
+      scrape_timeout: 10s
+
+      # External labels for federation/remote write
+      external_labels:
+        cluster: 'predictive-maintenance'
+        environment: 'production'
+
+    # Alerting configuration
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets:
+              - alertmanager:9093
+          scheme: http
+          timeout: 10s
+          api_version: v2
+
+    # Rule files
+    rule_files:
+      - /etc/prometheus/rules/*.yml
+
+    # Scrape configurations
+    scrape_configs:
+      # -----------------------------------------------------------------------
+      # Prometheus self-monitoring
+      # -----------------------------------------------------------------------
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+        metrics_path: /metrics
+        scheme: http
+
+      # -----------------------------------------------------------------------
+      # KServe InferenceServices
+      # -----------------------------------------------------------------------
+      - job_name: 'kserve-inferenceservices'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - mlops
+        relabel_configs:
+          # Keep only pods with inference service labels
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_component]
+            action: keep
+            regex: inference-service
+          # Set job name from pod label
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            target_label: model_name
+          # Set instance from pod name
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: instance
+          # Use port 8000 for custom containers
+          - source_labels: [__meta_kubernetes_pod_container_port_number]
+            action: keep
+            regex: '8000|8080'
+          # Set metrics path
+          - target_label: __metrics_path__
+            replacement: /metrics
+
+      # -----------------------------------------------------------------------
+      # FastAPI Serving Endpoints
+      # -----------------------------------------------------------------------
+      - job_name: 'fastapi-serving'
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - mlops
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_label_app_kubernetes_io_name]
+            action: keep
+            regex: rul-.*
+          - source_labels: [__meta_kubernetes_endpoint_port_name]
+            action: keep
+            regex: http
+          - source_labels: [__meta_kubernetes_service_name]
+            target_label: service
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+
+      # -----------------------------------------------------------------------
+      # MLflow Server
+      # -----------------------------------------------------------------------
+      - job_name: 'mlflow'
+        static_configs:
+          - targets: ['mlflow:5000']
+            labels:
+              service: 'mlflow'
+        metrics_path: /metrics
+        scrape_interval: 60s
+
+      # -----------------------------------------------------------------------
+      # PostgreSQL (via postgres_exporter if deployed)
+      # -----------------------------------------------------------------------
+      - job_name: 'postgres'
+        static_configs:
+          - targets: ['postgres-exporter:9187']
+            labels:
+              service: 'postgres'
+        scrape_interval: 60s
+
+      # -----------------------------------------------------------------------
+      # Kubernetes API Server
+      # -----------------------------------------------------------------------
+      - job_name: 'kubernetes-apiservers'
+        kubernetes_sd_configs:
+          - role: endpoints
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_namespace, __meta_kubernetes_service_name, __meta_kubernetes_endpoint_port_name]
+            action: keep
+            regex: default;kubernetes;https
+
+      # -----------------------------------------------------------------------
+      # Kubernetes Nodes
+      # -----------------------------------------------------------------------
+      - job_name: 'kubernetes-nodes'
+        kubernetes_sd_configs:
+          - role: node
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/${1}/proxy/metrics
+
+      # -----------------------------------------------------------------------
+      # Kubernetes Pods (general)
+      # -----------------------------------------------------------------------
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - mlops
+        relabel_configs:
+          # Only scrape pods with prometheus.io/scrape annotation
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          # Use custom path if specified
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          # Use custom port if specified
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          # Add pod labels
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+
+  # ===========================================================================
+  # Alerting Rules
+  # ===========================================================================
+  alerts.yml: |
+    groups:
+      # -----------------------------------------------------------------------
+      # ML Model Performance Alerts
+      # -----------------------------------------------------------------------
+      - name: ml-model-performance
+        interval: 30s
+        rules:
+          # High prediction latency (P95 > 1 second)
+          - alert: HighPredictionLatency
+            expr: |
+              histogram_quantile(0.95,
+                sum(rate(predictive_maintenance_prediction_latency_seconds_bucket[5m])) by (le, model_type)
+              ) > 1
+            for: 5m
+            labels:
+              severity: warning
+              team: ml-platform
+            annotations:
+              summary: "High prediction latency detected"
+              description: "P95 latency for {{ $labels.model_type }} is {{ $value | printf \"%.2f\" }}s (threshold: 1s)"
+              runbook_url: "https://wiki.example.com/runbooks/high-latency"
+
+          # Critical latency (P99 > 2 seconds)
+          - alert: CriticalPredictionLatency
+            expr: |
+              histogram_quantile(0.99,
+                sum(rate(predictive_maintenance_prediction_latency_seconds_bucket[5m])) by (le, model_type)
+              ) > 2
+            for: 2m
+            labels:
+              severity: critical
+              team: ml-platform
+            annotations:
+              summary: "Critical prediction latency"
+              description: "P99 latency for {{ $labels.model_type }} is {{ $value | printf \"%.2f\" }}s"
+
+          # High error rate (> 5%)
+          - alert: HighPredictionErrorRate
+            expr: |
+              sum(rate(predictive_maintenance_predictions_total{status="error"}[5m])) by (model_type)
+              /
+              sum(rate(predictive_maintenance_predictions_total[5m])) by (model_type)
+              > 0.05
+            for: 5m
+            labels:
+              severity: warning
+              team: ml-platform
+            annotations:
+              summary: "High prediction error rate"
+              description: "Error rate for {{ $labels.model_type }} is {{ $value | humanizePercentage }}"
+
+          # Critical error rate (> 10%)
+          - alert: CriticalPredictionErrorRate
+            expr: |
+              sum(rate(predictive_maintenance_predictions_total{status="error"}[5m])) by (model_type)
+              /
+              sum(rate(predictive_maintenance_predictions_total[5m])) by (model_type)
+              > 0.1
+            for: 2m
+            labels:
+              severity: critical
+              team: ml-platform
+            annotations:
+              summary: "Critical prediction error rate"
+              description: "Error rate for {{ $labels.model_type }} is {{ $value | humanizePercentage }}"
+
+          # No predictions in 5 minutes
+          - alert: NoPredictions
+            expr: |
+              sum(rate(predictive_maintenance_predictions_total[5m])) by (model_type) == 0
+            for: 5m
+            labels:
+              severity: warning
+              team: ml-platform
+            annotations:
+              summary: "No predictions received"
+              description: "Model {{ $labels.model_type }} has not received any predictions in 5 minutes"
+
+      # -----------------------------------------------------------------------
+      # Drift Detection Alerts
+      # -----------------------------------------------------------------------
+      - name: ml-drift-detection
+        interval: 60s
+        rules:
+          # Data drift detected (PSI > 0.25)
+          - alert: DataDriftDetected
+            expr: |
+              predictive_maintenance_drift_score{drift_type="psi"} > 0.25
+            for: 10m
+            labels:
+              severity: warning
+              team: ml-platform
+            annotations:
+              summary: "Data drift detected"
+              description: "Feature {{ $labels.feature }} has PSI score of {{ $value | printf \"%.3f\" }} (threshold: 0.25)"
+              runbook_url: "https://wiki.example.com/runbooks/data-drift"
+
+          # Critical data drift (PSI > 0.4)
+          - alert: CriticalDataDrift
+            expr: |
+              predictive_maintenance_drift_score{drift_type="psi"} > 0.4
+            for: 5m
+            labels:
+              severity: critical
+              team: ml-platform
+            annotations:
+              summary: "Critical data drift - retraining required"
+              description: "Feature {{ $labels.feature }} has PSI score of {{ $value | printf \"%.3f\" }}"
+
+          # Concept drift flag
+          - alert: ConceptDriftDetected
+            expr: |
+              predictive_maintenance_concept_drift_detected == 1
+            for: 10m
+            labels:
+              severity: warning
+              team: ml-platform
+            annotations:
+              summary: "Concept drift detected"
+              description: "Model performance degradation detected - consider retraining"
+
+          # Prediction distribution drift
+          - alert: PredictionDriftDetected
+            expr: |
+              predictive_maintenance_prediction_drift_detected == 1
+            for: 10m
+            labels:
+              severity: warning
+              team: ml-platform
+            annotations:
+              summary: "Prediction distribution drift detected"
+              description: "Prediction distribution has shifted significantly"
+
+      # -----------------------------------------------------------------------
+      # Infrastructure Alerts
+      # -----------------------------------------------------------------------
+      - name: ml-infrastructure
+        interval: 30s
+        rules:
+          # Pod not ready
+          - alert: InferenceServiceNotReady
+            expr: |
+              kube_pod_status_ready{namespace="mlops", condition="true"} == 0
+            for: 5m
+            labels:
+              severity: warning
+              team: ml-platform
+            annotations:
+              summary: "Inference service pod not ready"
+              description: "Pod {{ $labels.pod }} in namespace {{ $labels.namespace }} is not ready"
+
+          # High CPU usage
+          - alert: HighCPUUsage
+            expr: |
+              sum(rate(container_cpu_usage_seconds_total{namespace="mlops"}[5m])) by (pod)
+              /
+              sum(kube_pod_container_resource_limits{namespace="mlops", resource="cpu"}) by (pod)
+              > 0.9
+            for: 10m
+            labels:
+              severity: warning
+              team: ml-platform
+            annotations:
+              summary: "High CPU usage"
+              description: "Pod {{ $labels.pod }} CPU usage is {{ $value | humanizePercentage }}"
+
+          # High memory usage
+          - alert: HighMemoryUsage
+            expr: |
+              sum(container_memory_working_set_bytes{namespace="mlops"}) by (pod)
+              /
+              sum(kube_pod_container_resource_limits{namespace="mlops", resource="memory"}) by (pod)
+              > 0.9
+            for: 10m
+            labels:
+              severity: warning
+              team: ml-platform
+            annotations:
+              summary: "High memory usage"
+              description: "Pod {{ $labels.pod }} memory usage is {{ $value | humanizePercentage }}"
+
+          # MLflow unavailable
+          - alert: MLflowUnavailable
+            expr: |
+              up{job="mlflow"} == 0
+            for: 5m
+            labels:
+              severity: critical
+              team: ml-platform
+            annotations:
+              summary: "MLflow server unavailable"
+              description: "MLflow tracking server is not responding"
+
+      # -----------------------------------------------------------------------
+      # Business Alerts
+      # -----------------------------------------------------------------------
+      - name: ml-business
+        interval: 60s
+        rules:
+          # Critical RUL prediction (equipment at risk)
+          - alert: CriticalRULPrediction
+            expr: |
+              predictive_maintenance_rul_prediction_value < 10
+            for: 1m
+            labels:
+              severity: critical
+              team: operations
+            annotations:
+              summary: "Critical RUL prediction - immediate maintenance required"
+              description: "Unit {{ $labels.unit_id }} has predicted RUL of {{ $value | printf \"%.1f\" }} cycles"
+
+          # Warning RUL prediction
+          - alert: WarningRULPrediction
+            expr: |
+              predictive_maintenance_rul_prediction_value < 25
+            for: 5m
+            labels:
+              severity: warning
+              team: operations
+            annotations:
+              summary: "Low RUL prediction - schedule maintenance"
+              description: "Unit {{ $labels.unit_id }} has predicted RUL of {{ $value | printf \"%.1f\" }} cycles"
+
+  # ===========================================================================
+  # Recording Rules (Pre-computed metrics for dashboards)
+  # ===========================================================================
+  recording_rules.yml: |
+    groups:
+      - name: ml-recording-rules
+        interval: 30s
+        rules:
+          # Prediction rate per model
+          - record: ml:predictions:rate5m
+            expr: sum(rate(predictive_maintenance_predictions_total[5m])) by (model_type, status)
+
+          # Error rate per model
+          - record: ml:error_rate:rate5m
+            expr: |
+              sum(rate(predictive_maintenance_predictions_total{status="error"}[5m])) by (model_type)
+              /
+              sum(rate(predictive_maintenance_predictions_total[5m])) by (model_type)
+
+          # P50 latency
+          - record: ml:latency:p50
+            expr: |
+              histogram_quantile(0.50,
+                sum(rate(predictive_maintenance_prediction_latency_seconds_bucket[5m])) by (le, model_type)
+              )
+
+          # P95 latency
+          - record: ml:latency:p95
+            expr: |
+              histogram_quantile(0.95,
+                sum(rate(predictive_maintenance_prediction_latency_seconds_bucket[5m])) by (le, model_type)
+              )
+
+          # P99 latency
+          - record: ml:latency:p99
+            expr: |
+              histogram_quantile(0.99,
+                sum(rate(predictive_maintenance_prediction_latency_seconds_bucket[5m])) by (le, model_type)
+              )
+
+          # Average drift score
+          - record: ml:drift:avg_psi
+            expr: avg(predictive_maintenance_drift_score{drift_type="psi"})
+
+          # Max drift score
+          - record: ml:drift:max_psi
+            expr: max(predictive_maintenance_drift_score{drift_type="psi"})

@@ -1,0 +1,290 @@
+# =============================================================================
+# Grafana Configuration ConfigMaps
+# =============================================================================
+# Contains datasource and dashboard provisioning configurations.
+#
+# Apply with: kubectl apply -f k8s/monitoring/grafana/configmap.yaml
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Grafana Main Configuration
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-config
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: config
+    app.kubernetes.io/part-of: monitoring
+data:
+  grafana.ini: |
+    [server]
+    domain = grafana.example.com
+    root_url = %(protocol)s://%(domain)s/
+    serve_from_sub_path = false
+
+    [security]
+    admin_user = admin
+    disable_gravatar = true
+    cookie_secure = true
+    cookie_samesite = strict
+
+    [users]
+    allow_sign_up = false
+    allow_org_create = false
+    auto_assign_org = true
+    auto_assign_org_role = Viewer
+
+    [auth]
+    disable_login_form = false
+    disable_signout_menu = false
+
+    [auth.anonymous]
+    enabled = false
+
+    [dashboards]
+    versions_to_keep = 20
+    min_refresh_interval = 5s
+
+    [alerting]
+    enabled = true
+    execute_alerts = true
+
+    [unified_alerting]
+    enabled = true
+
+    [analytics]
+    check_for_updates = false
+    reporting_enabled = false
+
+    [log]
+    mode = console
+    level = info
+
+    [metrics]
+    enabled = true
+
+---
+# -----------------------------------------------------------------------------
+# Grafana Datasources Configuration
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: datasources
+    app.kubernetes.io/part-of: monitoring
+data:
+  datasources.yaml: |
+    apiVersion: 1
+
+    deleteDatasources:
+      - name: Prometheus
+        orgId: 1
+
+    datasources:
+      # Prometheus datasource
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+        editable: false
+        jsonData:
+          httpMethod: POST
+          manageAlerts: true
+          prometheusType: Prometheus
+          prometheusVersion: "2.48.0"
+          cacheLevel: "High"
+          disableRecordingRules: false
+          incrementalQueryOverlapWindow: "10m"
+          exemplarTraceIdDestinations:
+            - name: trace_id
+              datasourceUid: tempo
+
+      # Alertmanager datasource (if deployed)
+      - name: Alertmanager
+        type: alertmanager
+        uid: alertmanager
+        access: proxy
+        url: http://alertmanager:9093
+        editable: false
+        jsonData:
+          implementation: prometheus
+
+      # Loki datasource (if deployed for logs)
+      # - name: Loki
+      #   type: loki
+      #   uid: loki
+      #   access: proxy
+      #   url: http://loki:3100
+      #   editable: false
+
+---
+# -----------------------------------------------------------------------------
+# Grafana Dashboard Provisioning Configuration
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provisioning
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: dashboard-provisioning
+    app.kubernetes.io/part-of: monitoring
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+
+    providers:
+      - name: 'ML Platform Dashboards'
+        orgId: 1
+        folder: 'ML Platform'
+        folderUid: 'ml-platform'
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 30
+        allowUiUpdates: true
+        options:
+          path: /var/lib/grafana/dashboards/ml-platform
+          foldersFromFilesStructure: false
+
+      - name: 'Infrastructure Dashboards'
+        orgId: 1
+        folder: 'Infrastructure'
+        folderUid: 'infrastructure'
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 30
+        options:
+          path: /var/lib/grafana/dashboards/infrastructure
+
+---
+# -----------------------------------------------------------------------------
+# Grafana Notifiers Configuration (for alerting)
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-notifiers
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: notifiers
+    app.kubernetes.io/part-of: monitoring
+data:
+  notifiers.yaml: |
+    apiVersion: 1
+
+    notifiers:
+      # Slack notification channel
+      - name: slack-ml-alerts
+        type: slack
+        uid: slack-ml-alerts
+        org_id: 1
+        is_default: true
+        send_reminder: true
+        frequency: "1h"
+        disable_resolve_message: false
+        settings:
+          url: "${SLACK_WEBHOOK_URL}"
+          recipient: "#ml-alerts"
+          username: "Grafana Alert"
+          icon_emoji: ":robot_face:"
+          mention: "here"
+          mentionUsers: ""
+          mentionGroups: ""
+          token: ""
+
+      # Email notification channel
+      - name: email-ml-team
+        type: email
+        uid: email-ml-team
+        org_id: 1
+        is_default: false
+        settings:
+          addresses: "ml-team@example.com"
+          singleEmail: true
+
+      # PagerDuty for critical alerts
+      - name: pagerduty-critical
+        type: pagerduty
+        uid: pagerduty-critical
+        org_id: 1
+        is_default: false
+        settings:
+          integrationKey: "${PAGERDUTY_INTEGRATION_KEY}"
+          autoResolve: true
+          severity: "critical"
+
+---
+# -----------------------------------------------------------------------------
+# Grafana Alert Rules ConfigMap
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-alerting
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/component: alerting
+    app.kubernetes.io/part-of: monitoring
+data:
+  alerting.yaml: |
+    apiVersion: 1
+
+    groups:
+      - orgId: 1
+        name: ML Model Alerts
+        folder: ML Platform
+        interval: 1m
+        rules:
+          - uid: high-latency-alert
+            title: High Prediction Latency
+            condition: C
+            data:
+              - refId: A
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: prometheus
+                model:
+                  expr: histogram_quantile(0.95, sum(rate(predictive_maintenance_prediction_latency_seconds_bucket[5m])) by (le))
+                  intervalMs: 1000
+                  maxDataPoints: 43200
+              - refId: B
+                relativeTimeRange:
+                  from: 300
+                  to: 0
+                datasourceUid: __expr__
+                model:
+                  conditions:
+                    - evaluator:
+                        params:
+                          - 1
+                        type: gt
+                      operator:
+                        type: and
+                      query:
+                        params:
+                          - A
+                      reducer:
+                        type: last
+                  refId: B
+                  type: classic_conditions
+            noDataState: NoData
+            execErrState: Error
+            for: 5m
+            annotations:
+              description: "P95 latency is {{ $values.A }} seconds"
+              summary: "High prediction latency detected"
+            labels:
+              severity: warning

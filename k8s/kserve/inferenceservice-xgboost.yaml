@@ -1,0 +1,265 @@
+# =============================================================================
+# KServe InferenceService - XGBoost Model
+# =============================================================================
+# Deploys a standalone XGBoost model for RUL prediction.
+# Optimized for high-throughput inference with excellent accuracy.
+#
+# Apply with: kubectl apply -f k8s/kserve/inferenceservice-xgboost.yaml
+# =============================================================================
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: rul-xgboost
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: rul-xgboost
+    app.kubernetes.io/component: inference-service
+    app.kubernetes.io/part-of: predictive-maintenance
+    app.kubernetes.io/version: "1.0.0"
+    model-type: xgboost
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8080"
+    prometheus.io/path: "/metrics"
+    # Model metadata
+    model.kserve.io/framework: "xgboost"
+    model.kserve.io/model-type: "regressor"
+spec:
+  predictor:
+    # Autoscaling configuration
+    minReplicas: 1
+    maxReplicas: 5
+    containerConcurrency: 25  # XGBoost handles high concurrency well
+
+    # Scale metrics
+    scaleTarget: 70
+    scaleMetric: "cpu"
+
+    # Service account
+    serviceAccountName: ml-workload
+
+    # Timeout
+    timeout: 30
+
+    # Use XGBoost server for native model serving
+    xgboost:
+      # Model storage location
+      storageUri: "pvc://model-registry/xgb_model"
+
+      # Runtime version
+      runtimeVersion: "2.0.3"
+
+      # Resource requirements
+      resources:
+        requests:
+          cpu: "250m"
+          memory: "512Mi"
+        limits:
+          cpu: "1"
+          memory: "2Gi"
+
+      # Environment variables
+      env:
+        - name: MLFLOW_TRACKING_URI
+          value: "http://mlflow.mlops.svc.cluster.local:5000"
+        - name: MODEL_NAME
+          value: "xgboost_rul"
+        - name: NTHREAD
+          value: "4"  # XGBoost parallel threads
+
+    # Pod affinity
+    affinity:
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                  - key: app.kubernetes.io/name
+                    operator: In
+                    values:
+                      - rul-xgboost
+              topologyKey: kubernetes.io/hostname
+
+---
+# =============================================================================
+# Alternative: Custom Container for XGBoost
+# =============================================================================
+apiVersion: serving.kserve.io/v1beta1
+kind: InferenceService
+metadata:
+  name: rul-xgb-custom
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: rul-xgb-custom
+    app.kubernetes.io/component: inference-service
+    app.kubernetes.io/part-of: predictive-maintenance
+    model-type: xgboost
+spec:
+  predictor:
+    minReplicas: 1
+    maxReplicas: 5
+    containerConcurrency: 25
+
+    serviceAccountName: ml-workload
+    timeout: 30
+
+    containers:
+      - name: xgb-predictor
+        image: gcr.io/predictive-maintenance/pm-serving-xgb:latest
+        imagePullPolicy: Always
+
+        ports:
+          - containerPort: 8000
+            protocol: TCP
+            name: http
+
+        env:
+          - name: MLFLOW_TRACKING_URI
+            value: "http://mlflow.mlops.svc.cluster.local:5000"
+          - name: MODEL_DIR
+            value: "/models"
+          - name: MODEL_TYPE
+            value: "xgboost"
+          - name: LOG_LEVEL
+            value: "INFO"
+          # XGBoost specific
+          - name: OMP_NUM_THREADS
+            value: "4"
+
+        resources:
+          requests:
+            cpu: "250m"
+            memory: "512Mi"
+          limits:
+            cpu: "1"
+            memory: "2Gi"
+
+        volumeMounts:
+          - name: model-storage
+            mountPath: /models
+            readOnly: true
+
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 2
+          failureThreshold: 3
+
+        startupProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 3
+          periodSeconds: 3
+          timeoutSeconds: 2
+          failureThreshold: 20
+
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1000
+          allowPrivilegeEscalation: false
+
+    volumes:
+      - name: model-storage
+        persistentVolumeClaim:
+          claimName: model-registry
+
+---
+# =============================================================================
+# HorizontalPodAutoscaler for XGBoost
+# =============================================================================
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: rul-xgboost-hpa
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: rul-xgboost
+    app.kubernetes.io/component: autoscaler
+spec:
+  scaleTargetRef:
+    apiVersion: serving.kserve.io/v1beta1
+    kind: InferenceService
+    name: rul-xgboost
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 30
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 30
+
+---
+# =============================================================================
+# PodDisruptionBudget
+# =============================================================================
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: rul-xgboost-pdb
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: rul-xgboost
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rul-xgboost
+
+---
+# =============================================================================
+# Canary Release Example (Traffic Split)
+# =============================================================================
+# Uncomment to enable canary deployment
+# apiVersion: serving.kserve.io/v1beta1
+# kind: InferenceService
+# metadata:
+#   name: rul-xgboost-canary
+#   namespace: mlops
+#   labels:
+#     app.kubernetes.io/name: rul-xgboost-canary
+#     model-type: xgboost
+# spec:
+#   predictor:
+#     # Canary deployment with traffic split
+#     canaryTrafficPercent: 20  # 20% to canary
+#     minReplicas: 1
+#     maxReplicas: 3
+#     xgboost:
+#       storageUri: "pvc://model-registry/xgb_model_v2"
+#       runtimeVersion: "2.0.3"
+#       resources:
+#         requests:
+#           cpu: "250m"
+#           memory: "512Mi"
+#         limits:
+#           cpu: "1"
+#           memory: "2Gi"

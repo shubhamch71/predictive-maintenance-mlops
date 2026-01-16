@@ -1,0 +1,329 @@
+# =============================================================================
+# ServiceMonitors for Prometheus Operator
+# =============================================================================
+# These ServiceMonitors configure automatic scraping of metrics from
+# KServe InferenceServices and other ML platform components.
+#
+# Requires: prometheus-operator installed in cluster
+#
+# Apply with: kubectl apply -f k8s/monitoring/prometheus/servicemonitor.yaml
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# ServiceMonitor for KServe Ensemble Model
+# -----------------------------------------------------------------------------
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kserve-ensemble
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: kserve-ensemble
+    app.kubernetes.io/component: servicemonitor
+    app.kubernetes.io/part-of: monitoring
+    # Label for Prometheus to select this ServiceMonitor
+    release: prometheus
+spec:
+  # Target services by label
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rul-ensemble
+  # Endpoints to scrape
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      honorLabels: true
+      # Relabeling
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_service_name]
+          targetLabel: service
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+      # Metric relabeling
+      metricRelabelings:
+        - sourceLabels: [__name__]
+          regex: "go_.*"
+          action: drop
+  # Namespace selector
+  namespaceSelector:
+    matchNames:
+      - mlops
+  # Job label
+  jobLabel: app.kubernetes.io/name
+
+---
+# -----------------------------------------------------------------------------
+# ServiceMonitor for KServe Random Forest Model
+# -----------------------------------------------------------------------------
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kserve-random-forest
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: kserve-random-forest
+    app.kubernetes.io/component: servicemonitor
+    app.kubernetes.io/part-of: monitoring
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rul-random-forest
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      honorLabels: true
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_service_name]
+          targetLabel: service
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+  namespaceSelector:
+    matchNames:
+      - mlops
+  jobLabel: app.kubernetes.io/name
+
+---
+# -----------------------------------------------------------------------------
+# ServiceMonitor for KServe XGBoost Model
+# -----------------------------------------------------------------------------
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kserve-xgboost
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: kserve-xgboost
+    app.kubernetes.io/component: servicemonitor
+    app.kubernetes.io/part-of: monitoring
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rul-xgboost
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      honorLabels: true
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_service_name]
+          targetLabel: service
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+  namespaceSelector:
+    matchNames:
+      - mlops
+  jobLabel: app.kubernetes.io/name
+
+---
+# -----------------------------------------------------------------------------
+# ServiceMonitor for All InferenceServices (wildcard)
+# -----------------------------------------------------------------------------
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kserve-all-models
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: kserve-all-models
+    app.kubernetes.io/component: servicemonitor
+    app.kubernetes.io/part-of: monitoring
+    release: prometheus
+spec:
+  # Match any InferenceService
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: inference-service
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+      honorLabels: true
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_service_name]
+          targetLabel: service
+        - sourceLabels: [__meta_kubernetes_namespace]
+          targetLabel: namespace
+        - sourceLabels: [__meta_kubernetes_service_label_model_type]
+          targetLabel: model_type
+  namespaceSelector:
+    matchNames:
+      - mlops
+  jobLabel: app.kubernetes.io/name
+
+---
+# -----------------------------------------------------------------------------
+# ServiceMonitor for MLflow
+# -----------------------------------------------------------------------------
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: mlflow
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/component: servicemonitor
+    app.kubernetes.io/part-of: monitoring
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mlflow
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 60s
+      scrapeTimeout: 10s
+  namespaceSelector:
+    matchNames:
+      - mlops
+  jobLabel: app.kubernetes.io/name
+
+---
+# -----------------------------------------------------------------------------
+# ServiceMonitor for PostgreSQL (if using postgres_exporter)
+# -----------------------------------------------------------------------------
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: postgres
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: servicemonitor
+    app.kubernetes.io/part-of: monitoring
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres-exporter
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 60s
+      scrapeTimeout: 10s
+  namespaceSelector:
+    matchNames:
+      - mlops
+  jobLabel: app.kubernetes.io/name
+
+---
+# -----------------------------------------------------------------------------
+# PodMonitor for Drift Detection Service
+# -----------------------------------------------------------------------------
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: drift-detector
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: drift-detector
+    app.kubernetes.io/component: podmonitor
+    app.kubernetes.io/part-of: monitoring
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: drift-detector
+  podMetricsEndpoints:
+    - port: http
+      path: /metrics
+      interval: 60s
+      scrapeTimeout: 10s
+  namespaceSelector:
+    matchNames:
+      - mlops
+
+---
+# -----------------------------------------------------------------------------
+# PrometheusRule for Custom Alerts
+# -----------------------------------------------------------------------------
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: ml-platform-alerts
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: ml-platform-alerts
+    app.kubernetes.io/component: alerting
+    app.kubernetes.io/part-of: monitoring
+    release: prometheus
+    # Required for prometheus-operator to pick up
+    prometheus: kube-prometheus
+    role: alert-rules
+spec:
+  groups:
+    - name: ml-slo
+      interval: 30s
+      rules:
+        # SLO: 99% of predictions should complete within 500ms
+        - alert: PredictionLatencySLOBreach
+          expr: |
+            (
+              sum(rate(predictive_maintenance_prediction_latency_seconds_bucket{le="0.5"}[5m]))
+              /
+              sum(rate(predictive_maintenance_prediction_latency_seconds_count[5m]))
+            ) < 0.99
+          for: 5m
+          labels:
+            severity: warning
+            slo: latency
+          annotations:
+            summary: "Prediction latency SLO breach"
+            description: "Less than 99% of predictions completing within 500ms"
+
+        # SLO: 99.9% availability (error rate < 0.1%)
+        - alert: PredictionAvailabilitySLOBreach
+          expr: |
+            (
+              sum(rate(predictive_maintenance_predictions_total{status="success"}[1h]))
+              /
+              sum(rate(predictive_maintenance_predictions_total[1h]))
+            ) < 0.999
+          for: 10m
+          labels:
+            severity: critical
+            slo: availability
+          annotations:
+            summary: "Prediction availability SLO breach"
+            description: "Availability dropped below 99.9%"
+
+    - name: ml-capacity
+      interval: 60s
+      rules:
+        # Capacity planning: high prediction volume
+        - alert: HighPredictionVolume
+          expr: |
+            sum(rate(predictive_maintenance_predictions_total[5m])) > 100
+          for: 10m
+          labels:
+            severity: info
+            team: ml-platform
+          annotations:
+            summary: "High prediction volume detected"
+            description: "Prediction rate is {{ $value | printf \"%.1f\" }} req/s"
+
+        # Scale-up recommendation
+        - alert: ScaleUpRecommended
+          expr: |
+            (
+              sum(rate(predictive_maintenance_prediction_latency_seconds_sum[5m]))
+              /
+              sum(rate(predictive_maintenance_prediction_latency_seconds_count[5m]))
+            ) > 0.3
+            and
+            sum(rate(predictive_maintenance_predictions_total[5m])) > 50
+          for: 10m
+          labels:
+            severity: info
+            team: ml-platform
+          annotations:
+            summary: "Scale-up recommended for inference service"
+            description: "High latency with high volume - consider scaling up"

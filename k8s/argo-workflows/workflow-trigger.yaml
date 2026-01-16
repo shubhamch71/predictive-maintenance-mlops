@@ -1,0 +1,547 @@
+# =============================================================================
+# Argo Events - Workflow Triggers
+# =============================================================================
+# EventSource and Sensor for triggering model retraining workflows
+# when drift is detected or via webhook.
+#
+# Prerequisites:
+# - Argo Events controller installed
+# - EventBus deployed in namespace
+#
+# Apply with: kubectl apply -f k8s/argo-workflows/workflow-trigger.yaml
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# EventBus (NATS-based event transport)
+# -----------------------------------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: EventBus
+metadata:
+  name: default
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: eventbus
+    app.kubernetes.io/component: events
+    app.kubernetes.io/part-of: mlops-automation
+spec:
+  nats:
+    native:
+      replicas: 3
+      auth: token
+      persistence:
+        storageClassName: standard
+        accessMode: ReadWriteOnce
+        volumeSize: 5Gi
+
+---
+# -----------------------------------------------------------------------------
+# EventSource - Webhook for Drift Detection
+# -----------------------------------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: EventSource
+metadata:
+  name: drift-detector-webhook
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: drift-detector-webhook
+    app.kubernetes.io/component: eventsource
+    app.kubernetes.io/part-of: mlops-automation
+spec:
+  service:
+    ports:
+      - port: 12000
+        targetPort: 12000
+  webhook:
+    # Endpoint for drift detector to call
+    drift-detected:
+      port: "12000"
+      endpoint: /drift
+      method: POST
+
+    # Endpoint for manual retraining trigger
+    manual-retrain:
+      port: "12000"
+      endpoint: /retrain
+      method: POST
+
+    # Health check endpoint
+    health:
+      port: "12000"
+      endpoint: /health
+      method: GET
+
+---
+# -----------------------------------------------------------------------------
+# EventSource Service (for external access)
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: drift-detector-webhook
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: drift-detector-webhook
+    app.kubernetes.io/component: service
+    app.kubernetes.io/part-of: mlops-automation
+spec:
+  type: ClusterIP
+  selector:
+    eventsource-name: drift-detector-webhook
+  ports:
+    - name: webhook
+      port: 12000
+      targetPort: 12000
+      protocol: TCP
+
+---
+# -----------------------------------------------------------------------------
+# EventSource - Prometheus Alertmanager
+# -----------------------------------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: EventSource
+metadata:
+  name: alertmanager-webhook
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: alertmanager-webhook
+    app.kubernetes.io/component: eventsource
+    app.kubernetes.io/part-of: mlops-automation
+spec:
+  service:
+    ports:
+      - port: 12001
+        targetPort: 12001
+  webhook:
+    # Receive alerts from Prometheus Alertmanager
+    alerts:
+      port: "12001"
+      endpoint: /alerts
+      method: POST
+
+---
+# -----------------------------------------------------------------------------
+# EventSource - Kafka (for streaming drift events)
+# -----------------------------------------------------------------------------
+# Uncomment if using Kafka for drift detection events
+# apiVersion: argoproj.io/v1alpha1
+# kind: EventSource
+# metadata:
+#   name: kafka-drift-events
+#   namespace: mlops
+# spec:
+#   kafka:
+#     drift-events:
+#       url: kafka.mlops.svc.cluster.local:9092
+#       topic: drift-detection-events
+#       partition: "0"
+#       consumerGroup:
+#         groupName: argo-events-drift
+#         rebalanceStrategy: sticky
+
+---
+# -----------------------------------------------------------------------------
+# Sensor - Drift Detection Trigger
+# -----------------------------------------------------------------------------
+apiVersion: argoproj.io/v1alpha1
+kind: Sensor
+metadata:
+  name: drift-retraining-sensor
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: drift-retraining-sensor
+    app.kubernetes.io/component: sensor
+    app.kubernetes.io/part-of: mlops-automation
+spec:
+  dependencies:
+    # Dependency 1: Drift detected via webhook
+    - name: drift-webhook
+      eventSourceName: drift-detector-webhook
+      eventName: drift-detected
+      filters:
+        data:
+          # Only trigger if drift score exceeds threshold
+          - path: body.drift_score
+            type: number
+            comparator: ">="
+            value:
+              - "0.25"
+          # Only trigger for critical drift types
+          - path: body.drift_type
+            type: string
+            value:
+              - "psi"
+              - "concept"
+              - "prediction"
+
+    # Dependency 2: Manual trigger via webhook
+    - name: manual-trigger
+      eventSourceName: drift-detector-webhook
+      eventName: manual-retrain
+
+    # Dependency 3: Alert from Prometheus Alertmanager
+    - name: alertmanager-drift
+      eventSourceName: alertmanager-webhook
+      eventName: alerts
+      filters:
+        data:
+          # Filter for drift-related alerts
+          - path: body.alerts.0.labels.alertname
+            type: string
+            value:
+              - "DataDriftDetected"
+              - "CriticalDataDrift"
+              - "ConceptDriftDetected"
+              - "PredictionDriftDetected"
+
+  triggers:
+    # -------------------------------------------------------------------------
+    # Trigger 1: Retraining workflow from drift webhook
+    # -------------------------------------------------------------------------
+    - template:
+        name: drift-triggered-retraining
+        conditions: "drift-webhook"
+        argoWorkflow:
+          operation: submit
+          source:
+            resource:
+              apiVersion: argoproj.io/v1alpha1
+              kind: Workflow
+              metadata:
+                generateName: drift-retraining-
+                namespace: mlops
+                labels:
+                  trigger-source: drift-detector
+                  workflows.argoproj.io/workflow-template: model-retraining-pipeline
+              spec:
+                workflowTemplateRef:
+                  name: model-retraining-pipeline
+                arguments:
+                  parameters:
+                    - name: drift_score
+                      value: ""  # Will be replaced by parameter
+                    - name: drift_type
+                      value: ""
+                    - name: trigger_source
+                      value: "drift-detector"
+                    - name: experiment_name
+                      value: "drift-triggered-retraining"
+          parameters:
+            # Extract drift_score from webhook payload
+            - src:
+                dependencyName: drift-webhook
+                dataKey: body.drift_score
+              dest: spec.arguments.parameters.0.value
+            # Extract drift_type from webhook payload
+            - src:
+                dependencyName: drift-webhook
+                dataKey: body.drift_type
+              dest: spec.arguments.parameters.1.value
+
+        # Retry policy for this trigger
+        retryStrategy:
+          steps: 3
+          duration: 30s
+          factor: 2
+          jitter: 0.1
+
+        # Rate limit to prevent too many retraining workflows
+        rateLimit:
+          requestsPerUnit: 1
+          unit: Hour
+
+    # -------------------------------------------------------------------------
+    # Trigger 2: Manual retraining workflow
+    # -------------------------------------------------------------------------
+    - template:
+        name: manual-triggered-retraining
+        conditions: "manual-trigger"
+        argoWorkflow:
+          operation: submit
+          source:
+            resource:
+              apiVersion: argoproj.io/v1alpha1
+              kind: Workflow
+              metadata:
+                generateName: manual-retraining-
+                namespace: mlops
+                labels:
+                  trigger-source: manual
+                  workflows.argoproj.io/workflow-template: model-retraining-pipeline
+              spec:
+                workflowTemplateRef:
+                  name: model-retraining-pipeline
+                arguments:
+                  parameters:
+                    - name: drift_score
+                      value: "0.0"
+                    - name: drift_type
+                      value: "manual"
+                    - name: trigger_source
+                      value: "manual"
+                    - name: experiment_name
+                      value: ""
+                    - name: data_lookback_days
+                      value: ""
+          parameters:
+            # Optional: experiment name from payload
+            - src:
+                dependencyName: manual-trigger
+                dataKey: body.experiment_name
+                dataTemplate: "{{ .Input | default \"manual-retraining\" }}"
+              dest: spec.arguments.parameters.3.value
+            # Optional: lookback days from payload
+            - src:
+                dependencyName: manual-trigger
+                dataKey: body.data_lookback_days
+                dataTemplate: "{{ .Input | default \"30\" }}"
+              dest: spec.arguments.parameters.4.value
+
+        # No rate limit for manual triggers
+        retryStrategy:
+          steps: 3
+          duration: 30s
+
+    # -------------------------------------------------------------------------
+    # Trigger 3: Alert-triggered retraining
+    # -------------------------------------------------------------------------
+    - template:
+        name: alert-triggered-retraining
+        conditions: "alertmanager-drift"
+        argoWorkflow:
+          operation: submit
+          source:
+            resource:
+              apiVersion: argoproj.io/v1alpha1
+              kind: Workflow
+              metadata:
+                generateName: alert-retraining-
+                namespace: mlops
+                labels:
+                  trigger-source: alertmanager
+                  workflows.argoproj.io/workflow-template: model-retraining-pipeline
+              spec:
+                workflowTemplateRef:
+                  name: model-retraining-pipeline
+                arguments:
+                  parameters:
+                    - name: drift_score
+                      value: ""
+                    - name: drift_type
+                      value: ""
+                    - name: trigger_source
+                      value: "alertmanager"
+                    - name: experiment_name
+                      value: "alert-triggered-retraining"
+          parameters:
+            # Extract drift score from alert annotation
+            - src:
+                dependencyName: alertmanager-drift
+                dataKey: body.alerts.0.annotations.drift_score
+                dataTemplate: "{{ .Input | default \"0.3\" }}"
+              dest: spec.arguments.parameters.0.value
+            # Extract drift type from alert label
+            - src:
+                dependencyName: alertmanager-drift
+                dataKey: body.alerts.0.labels.drift_type
+                dataTemplate: "{{ .Input | default \"psi\" }}"
+              dest: spec.arguments.parameters.1.value
+
+        # Rate limit alerts
+        rateLimit:
+          requestsPerUnit: 1
+          unit: Hour
+
+        retryStrategy:
+          steps: 3
+          duration: 60s
+
+---
+# -----------------------------------------------------------------------------
+# RBAC for Sensor
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: argo-events-sa
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: argo-events
+    app.kubernetes.io/part-of: mlops-automation
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: argo-events-role
+  namespace: mlops
+rules:
+  - apiGroups: ["argoproj.io"]
+    resources:
+      - workflows
+      - workflowtemplates
+      - sensors
+      - eventsources
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+      - events
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: argo-events-rolebinding
+  namespace: mlops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: argo-events-role
+subjects:
+  - kind: ServiceAccount
+    name: argo-events-sa
+    namespace: mlops
+  - kind: ServiceAccount
+    name: argo-workflow
+    namespace: mlops
+
+---
+# -----------------------------------------------------------------------------
+# ConfigMap for Drift Detector Integration
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: drift-trigger-config
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: drift-trigger
+    app.kubernetes.io/part-of: mlops-automation
+data:
+  # Webhook URL for drift detector to call
+  WEBHOOK_URL: "http://drift-detector-webhook.mlops.svc.cluster.local:12000/drift"
+
+  # Example payload format for drift detector
+  payload_example.json: |
+    {
+      "drift_score": 0.35,
+      "drift_type": "psi",
+      "detected_at": "2024-01-15T10:30:00Z",
+      "features_affected": ["sensor_1", "sensor_2", "sensor_5"],
+      "drift_details": {
+        "max_psi": 0.35,
+        "mean_psi": 0.28,
+        "features_above_threshold": 3
+      },
+      "recommendation": "retrain",
+      "model_name": "rul-ensemble",
+      "current_model_version": "v1.0.0"
+    }
+
+  # curl example for testing
+  test_command.sh: |
+    #!/bin/bash
+    # Test drift detection webhook
+    curl -X POST \
+      http://drift-detector-webhook.mlops.svc.cluster.local:12000/drift \
+      -H "Content-Type: application/json" \
+      -d '{
+        "drift_score": 0.35,
+        "drift_type": "psi",
+        "detected_at": "2024-01-15T10:30:00Z",
+        "features_affected": ["sensor_1", "sensor_2"],
+        "recommendation": "retrain"
+      }'
+
+    # Test manual retrain webhook
+    curl -X POST \
+      http://drift-detector-webhook.mlops.svc.cluster.local:12000/retrain \
+      -H "Content-Type: application/json" \
+      -d '{
+        "experiment_name": "manual-test",
+        "data_lookback_days": "60",
+        "reason": "Manual retraining request"
+      }'
+
+---
+# -----------------------------------------------------------------------------
+# NetworkPolicy for EventSource security
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: eventsource-policy
+  namespace: mlops
+  labels:
+    app.kubernetes.io/part-of: mlops-automation
+spec:
+  podSelector:
+    matchLabels:
+      eventsource-name: drift-detector-webhook
+  policyTypes:
+    - Ingress
+  ingress:
+    # Allow from drift detector pods
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: drift-detector
+      ports:
+        - protocol: TCP
+          port: 12000
+    # Allow from Alertmanager
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: alertmanager
+      ports:
+        - protocol: TCP
+          port: 12001
+    # Allow from same namespace (for testing)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: mlops
+      ports:
+        - protocol: TCP
+          port: 12000
+        - protocol: TCP
+          port: 12001
+
+---
+# -----------------------------------------------------------------------------
+# Alertmanager Config for Drift Alerts (reference)
+# -----------------------------------------------------------------------------
+# Add this receiver to your Alertmanager config to send drift alerts to Argo Events:
+#
+# receivers:
+#   - name: 'argo-events-webhook'
+#     webhook_configs:
+#       - url: 'http://alertmanager-webhook-eventsource-svc.mlops.svc.cluster.local:12001/alerts'
+#         send_resolved: false
+#
+# route:
+#   receiver: 'default-receiver'
+#   routes:
+#     - match:
+#         alertname: DataDriftDetected
+#       receiver: 'argo-events-webhook'
+#     - match:
+#         alertname: CriticalDataDrift
+#       receiver: 'argo-events-webhook'
+#     - match:
+#         alertname: ConceptDriftDetected
+#       receiver: 'argo-events-webhook'
