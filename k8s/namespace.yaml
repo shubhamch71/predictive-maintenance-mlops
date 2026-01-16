@@ -1,0 +1,190 @@
+# =============================================================================
+# Kubernetes Namespace for MLOps Platform
+# =============================================================================
+# Apply with: kubectl apply -f k8s/namespace.yaml
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: mlops
+  labels:
+    # Standard labels
+    app.kubernetes.io/name: mlops
+    app.kubernetes.io/part-of: predictive-maintenance
+    app.kubernetes.io/managed-by: kubectl
+    # Environment label
+    environment: production
+    # Team ownership
+    team: ml-platform
+  annotations:
+    # Description
+    description: "MLOps platform namespace for predictive maintenance"
+    # Contact info
+    contact: "ml-platform-team@company.com"
+---
+# =============================================================================
+# Resource Quota for the namespace
+# =============================================================================
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: mlops-quota
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: mlops-quota
+    app.kubernetes.io/part-of: predictive-maintenance
+spec:
+  hard:
+    # Compute resources
+    requests.cpu: "32"
+    requests.memory: "64Gi"
+    limits.cpu: "64"
+    limits.memory: "128Gi"
+    # GPU resources (if available)
+    requests.nvidia.com/gpu: "4"
+    # Storage
+    persistentvolumeclaims: "20"
+    requests.storage: "500Gi"
+    # Object counts
+    pods: "100"
+    services: "20"
+    secrets: "50"
+    configmaps: "50"
+---
+# =============================================================================
+# Limit Range for default resource limits
+# =============================================================================
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: mlops-limits
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: mlops-limits
+    app.kubernetes.io/part-of: predictive-maintenance
+spec:
+  limits:
+    # Default limits for containers
+    - type: Container
+      default:
+        cpu: "1"
+        memory: "2Gi"
+      defaultRequest:
+        cpu: "100m"
+        memory: "256Mi"
+      max:
+        cpu: "16"
+        memory: "64Gi"
+      min:
+        cpu: "50m"
+        memory: "64Mi"
+    # Default limits for pods
+    - type: Pod
+      max:
+        cpu: "32"
+        memory: "128Gi"
+    # PVC limits
+    - type: PersistentVolumeClaim
+      max:
+        storage: "100Gi"
+      min:
+        storage: "1Gi"
+---
+# =============================================================================
+# Network Policy - Default deny all ingress
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: default-deny-ingress
+    app.kubernetes.io/part-of: predictive-maintenance
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# =============================================================================
+# Network Policy - Allow internal namespace traffic
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-internal
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: allow-internal
+    app.kubernetes.io/part-of: predictive-maintenance
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/name: mlops
+---
+# =============================================================================
+# Service Account for ML workloads
+# =============================================================================
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: ml-workload
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: ml-workload
+    app.kubernetes.io/part-of: predictive-maintenance
+automountServiceAccountToken: true
+---
+# =============================================================================
+# Role for ML workloads
+# =============================================================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ml-workload-role
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: ml-workload-role
+    app.kubernetes.io/part-of: predictive-maintenance
+rules:
+  # Allow reading configmaps and secrets
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+  # Allow managing pods (for Kubeflow)
+  - apiGroups: [""]
+    resources: ["pods", "pods/log"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  # Allow managing PVCs
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  # Allow managing services
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+---
+# =============================================================================
+# RoleBinding for ML workloads
+# =============================================================================
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ml-workload-binding
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: ml-workload-binding
+    app.kubernetes.io/part-of: predictive-maintenance
+subjects:
+  - kind: ServiceAccount
+    name: ml-workload
+    namespace: mlops
+roleRef:
+  kind: Role
+  name: ml-workload-role
+  apiGroup: rbac.authorization.k8s.io

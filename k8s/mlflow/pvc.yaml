@@ -1,0 +1,140 @@
+# =============================================================================
+# PersistentVolumeClaims for MLflow
+# =============================================================================
+# Apply with: kubectl apply -f k8s/mlflow/pvc.yaml
+#
+# These PVCs provide persistent storage for:
+# 1. MLflow artifact store (models, plots, etc.)
+# 2. Raw training data
+# 3. Processed features
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# MLflow Artifact Store PVC
+# -----------------------------------------------------------------------------
+# Stores all MLflow artifacts including:
+# - Trained models
+# - Model artifacts (plots, metrics files)
+# - Logged artifacts from experiments
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mlflow-artifacts
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: mlflow-artifacts
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: mlflow
+  annotations:
+    description: "Storage for MLflow artifacts including models and experiment data"
+spec:
+  accessModes:
+    # ReadWriteMany allows multiple pods to mount simultaneously
+    # Required for parallel training jobs
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 20Gi
+  # Uncomment and set storage class based on your cluster
+  # For AWS EKS: efs-sc (EFS)
+  # For GKE: standard-rwx or filestore
+  # For Azure AKS: azurefile
+  # For on-prem: nfs-client
+  # storageClassName: nfs-client
+---
+# -----------------------------------------------------------------------------
+# Training Data PVC
+# -----------------------------------------------------------------------------
+# Stores raw training data (NASA Turbofan dataset)
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: training-data
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: training-data
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: predictive-maintenance
+  annotations:
+    description: "Storage for raw training data"
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+  # storageClassName: nfs-client
+---
+# -----------------------------------------------------------------------------
+# Feature Store PVC
+# -----------------------------------------------------------------------------
+# Stores processed features and scalers
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: feature-store
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: feature-store
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: predictive-maintenance
+  annotations:
+    description: "Storage for processed features and preprocessing artifacts"
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  # storageClassName: nfs-client
+---
+# -----------------------------------------------------------------------------
+# Model Registry PVC
+# -----------------------------------------------------------------------------
+# Local model storage (backup to MLflow)
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: model-registry
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: model-registry
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: predictive-maintenance
+  annotations:
+    description: "Local model storage as backup to MLflow registry"
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  # storageClassName: nfs-client
+---
+# -----------------------------------------------------------------------------
+# Drift Reports PVC
+# -----------------------------------------------------------------------------
+# Stores drift detection reports and visualizations
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: drift-reports
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: drift-reports
+    app.kubernetes.io/component: storage
+    app.kubernetes.io/part-of: monitoring
+  annotations:
+    description: "Storage for drift detection reports and visualizations"
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 5Gi
+  # storageClassName: nfs-client

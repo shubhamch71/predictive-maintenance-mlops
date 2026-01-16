@@ -1,0 +1,359 @@
+# =============================================================================
+# MLflow Server Deployment
+# =============================================================================
+# Apply with: kubectl apply -f k8s/mlflow/deployment.yaml
+#
+# This deploys MLflow tracking server with:
+# - PostgreSQL backend store (for metadata)
+# - PVC artifact store (for models and artifacts)
+# - Prometheus metrics endpoint
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# ConfigMap for MLflow configuration
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mlflow-config
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/component: tracking-server
+    app.kubernetes.io/part-of: mlflow
+data:
+  # MLflow settings
+  MLFLOW_TRACKING_URI: "http://mlflow:5000"
+  DEFAULT_ARTIFACT_ROOT: "/mlflow/artifacts"
+  # Gunicorn settings
+  GUNICORN_CMD_ARGS: "--timeout 300 --workers 2 --threads 4"
+---
+# -----------------------------------------------------------------------------
+# MLflow Deployment
+# -----------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mlflow
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/component: tracking-server
+    app.kubernetes.io/part-of: mlflow
+    app.kubernetes.io/version: "2.9.2"
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mlflow
+      app.kubernetes.io/component: tracking-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mlflow
+        app.kubernetes.io/component: tracking-server
+        app.kubernetes.io/part-of: mlflow
+      annotations:
+        # Prometheus scraping
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "5000"
+        prometheus.io/path: "/metrics"
+        # Force restart on config change
+        checksum/config: "{{ include (print $.Template.BasePath '/configmap.yaml') . | sha256sum }}"
+    spec:
+      # Service account
+      serviceAccountName: ml-workload
+
+      # Security context
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+
+      # Init container to wait for PostgreSQL
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              echo "Waiting for PostgreSQL to be ready..."
+              until nc -z postgres 5432; do
+                echo "PostgreSQL is not ready - sleeping"
+                sleep 2
+              done
+              echo "PostgreSQL is ready!"
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            allowPrivilegeEscalation: false
+
+      containers:
+        - name: mlflow
+          image: ghcr.io/mlflow/mlflow:v2.9.2
+          imagePullPolicy: IfNotPresent
+
+          # Command to start MLflow server
+          command:
+            - mlflow
+            - server
+          args:
+            - --host=0.0.0.0
+            - --port=5000
+            # PostgreSQL backend store
+            - --backend-store-uri=postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@postgres:5432/$(POSTGRES_DB)
+            # Local artifact store (PVC)
+            - --default-artifact-root=/mlflow/artifacts
+            # Serve artifacts
+            - --serve-artifacts
+            # Workers
+            - --workers=2
+
+          ports:
+            - name: http
+              containerPort: 5000
+              protocol: TCP
+
+          # Environment variables
+          env:
+            # PostgreSQL credentials from secret
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_DB
+            # MLflow settings
+            - name: MLFLOW_TRACKING_URI
+              valueFrom:
+                configMapKeyRef:
+                  name: mlflow-config
+                  key: MLFLOW_TRACKING_URI
+
+          # Resource limits
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "2"
+              memory: "4Gi"
+
+          # Volume mounts
+          volumeMounts:
+            - name: mlflow-artifacts
+              mountPath: /mlflow/artifacts
+
+          # Liveness probe
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 10
+            failureThreshold: 3
+
+          # Readiness probe
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Startup probe (for slow starts)
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+
+          # Security context
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+
+      # Volumes
+      volumes:
+        - name: mlflow-artifacts
+          persistentVolumeClaim:
+            claimName: mlflow-artifacts
+
+      # Termination grace period
+      terminationGracePeriodSeconds: 30
+
+      # Restart policy
+      restartPolicy: Always
+
+      # Node affinity (optional)
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - mlflow
+                topologyKey: kubernetes.io/hostname
+---
+# -----------------------------------------------------------------------------
+# MLflow Service (LoadBalancer/NodePort)
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: Service
+metadata:
+  name: mlflow
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/component: tracking-server
+    app.kubernetes.io/part-of: mlflow
+  annotations:
+    # Prometheus service discovery
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "5000"
+spec:
+  # Change to LoadBalancer for cloud providers
+  # Or use NodePort for on-prem
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/component: tracking-server
+  ports:
+    - name: http
+      port: 5000
+      targetPort: 5000
+      protocol: TCP
+      # NodePort range: 30000-32767
+      nodePort: 30500
+  sessionAffinity: None
+---
+# -----------------------------------------------------------------------------
+# MLflow Ingress (optional - for external access)
+# -----------------------------------------------------------------------------
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: mlflow
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/component: tracking-server
+    app.kubernetes.io/part-of: mlflow
+  annotations:
+    # Nginx ingress annotations
+    nginx.ingress.kubernetes.io/proxy-body-size: "500m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    # SSL redirect (uncomment for HTTPS)
+    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: mlflow.example.com  # Change to your domain
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: mlflow
+                port:
+                  number: 5000
+  # TLS configuration (uncomment for HTTPS)
+  # tls:
+  #   - hosts:
+  #       - mlflow.example.com
+  #     secretName: mlflow-tls
+---
+# -----------------------------------------------------------------------------
+# HorizontalPodAutoscaler (optional)
+# -----------------------------------------------------------------------------
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: mlflow-hpa
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/component: tracking-server
+    app.kubernetes.io/part-of: mlflow
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: mlflow
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Percent
+          value: 50
+          periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 30
+---
+# -----------------------------------------------------------------------------
+# PodDisruptionBudget
+# -----------------------------------------------------------------------------
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: mlflow-pdb
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: mlflow
+    app.kubernetes.io/component: tracking-server
+    app.kubernetes.io/part-of: mlflow
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mlflow
+      app.kubernetes.io/component: tracking-server
