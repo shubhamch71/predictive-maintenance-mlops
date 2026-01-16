@@ -3,12 +3,13 @@
 NASA Turbofan Engine Degradation Dataset Downloader.
 
 This script downloads the C-MAPSS (Commercial Modular Aero-Propulsion System Simulation)
-dataset from NASA's Prognostic Data Repository. The dataset contains run-to-failure
-simulated data for turbofan engine degradation.
+dataset from Kaggle (primary) or NASA's Prognostic Data Repository (backup).
+The dataset contains run-to-failure simulated data for turbofan engine degradation.
 
 Dataset Information:
-    - Source: NASA Prognostic Center of Excellence
-    - URL: https://ti.arc.nasa.gov/tech/dash/groups/pcoe/prognostic-data-repository/
+    - Source: NASA Prognostic Center of Excellence (via Kaggle)
+    - Primary URL: https://www.kaggle.com/datasets/bishals098/nasa-turbofan-engine-degradation-simulation
+    - Backup URL: https://ti.arc.nasa.gov/tech/dash/groups/pcoe/prognostic-data-repository/
     - Contains: FD001, FD002, FD003, FD004 datasets
     - Each dataset has train, test, and RUL files
 
@@ -110,13 +111,14 @@ class TurbofanDataDownloader:
         >>> print(downloader.get_available_files())
     """
 
-    # NASA dataset URL (direct download link for CMAPSSData.zip)
+    # Primary dataset URL (Kaggle - more reliable)
     DATASET_URL = (
-        "https://ti.arc.nasa.gov/c/6/"
+        "https://www.kaggle.com/api/v1/datasets/download/bishals098/nasa-turbofan-engine-degradation-simulation"
     )
 
-    # Alternative mirror/backup URLs
+    # Alternative mirror/backup URLs (NASA sources)
     BACKUP_URLS = [
+        "https://ti.arc.nasa.gov/c/6/",
         "https://data.nasa.gov/download/cqx2-p9e6/application%2Fzip",
     ]
 
@@ -245,7 +247,8 @@ class TurbofanDataDownloader:
         raise DownloadError(
             "Failed to download dataset from all available URLs. "
             "Please download manually from: "
-            "https://ti.arc.nasa.gov/tech/dash/groups/pcoe/prognostic-data-repository/"
+            "https://www.kaggle.com/datasets/bishals098/nasa-turbofan-engine-degradation-simulation "
+            "or https://ti.arc.nasa.gov/tech/dash/groups/pcoe/prognostic-data-repository/"
         )
 
     def _extract_zip(self) -> None:
