@@ -24,7 +24,7 @@
 # -----------------------------------------------------------------------------
 # Stage 1: Builder - Install dependencies and compile packages
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS builder
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -74,13 +74,12 @@ RUN pip install \
     pyyaml==6.0.1 \
     requests==2.31.0
 
-# Clean up pip cache
-RUN pip cache purge
+# Note: pip cache is already disabled via PIP_NO_CACHE_DIR=1
 
 # -----------------------------------------------------------------------------
 # Stage 2: Runtime - Minimal image with only runtime dependencies
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim as runtime
+FROM python:3.11-slim AS runtime
 
 # Labels for container metadata
 LABEL maintainer="ML Platform Team" \
@@ -137,7 +136,7 @@ RUN touch ${APP_HOME}/__init__.py && \
     touch ${APP_HOME}/kubeflow/components/__init__.py
 
 # Set PYTHONPATH
-ENV PYTHONPATH="${APP_HOME}:${PYTHONPATH}"
+ENV PYTHONPATH="${APP_HOME}"
 
 # Switch to non-root user
 USER mluser
@@ -154,25 +153,25 @@ CMD ["python", "-c", "print('Predictive Maintenance Training Container Ready. Us
 # -----------------------------------------------------------------------------
 
 # Data Ingestion Component
-FROM runtime as data-ingestion
+FROM runtime AS data-ingestion
 CMD ["python", "-m", "kubeflow.components.data_ingestion"]
 
 # Feature Engineering Component
-FROM runtime as feature-engineering
+FROM runtime AS feature-engineering
 CMD ["python", "-m", "kubeflow.components.feature_engineering"]
 
 # Random Forest Training Component
-FROM runtime as train-rf
+FROM runtime AS train-rf
 CMD ["python", "-m", "kubeflow.components.train_rf"]
 
 # XGBoost Training Component
-FROM runtime as train-xgboost
+FROM runtime AS train-xgboost
 CMD ["python", "-m", "kubeflow.components.train_xgboost"]
 
 # LSTM Training Component
-FROM runtime as train-lstm
+FROM runtime AS train-lstm
 CMD ["python", "-m", "kubeflow.components.train_lstm"]
 
 # Model Evaluation Component
-FROM runtime as evaluate
+FROM runtime AS evaluate
 CMD ["python", "-m", "kubeflow.components.evaluate_models"]

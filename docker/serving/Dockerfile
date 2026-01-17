@@ -25,7 +25,7 @@
 # -----------------------------------------------------------------------------
 # Stage 1: Builder - Install dependencies
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS builder
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -48,13 +48,13 @@ COPY docker/serving/requirements.txt /tmp/requirements.txt
 
 # Install dependencies in optimal order for caching
 RUN pip install --upgrade pip wheel && \
-    pip install -r /tmp/requirements.txt && \
-    pip cache purge
+    pip install -r /tmp/requirements.txt
+# Note: pip cache is already disabled via PIP_NO_CACHE_DIR=1
 
 # -----------------------------------------------------------------------------
 # Stage 2: Runtime - Minimal production image
 # -----------------------------------------------------------------------------
-FROM python:3.11-slim as runtime
+FROM python:3.11-slim AS runtime
 
 # Labels
 LABEL maintainer="ML Platform Team" \
@@ -123,7 +123,7 @@ RUN touch ${APP_HOME}/__init__.py && \
     touch ${APP_HOME}/src/monitoring/__init__.py
 
 # Set PYTHONPATH
-ENV PYTHONPATH="${APP_HOME}:${PYTHONPATH}"
+ENV PYTHONPATH="${APP_HOME}"
 
 # Switch to non-root user
 USER appuser
@@ -150,7 +150,7 @@ CMD ["uvicorn", "src.serving.api:app", \
 # -----------------------------------------------------------------------------
 # Stage 3: Development image (optional)
 # -----------------------------------------------------------------------------
-FROM runtime as development
+FROM runtime AS development
 
 USER root
 
