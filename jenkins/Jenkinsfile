@@ -30,6 +30,28 @@ pipeline {
         ansiColor('xterm')
     }
 
+    parameters {
+        // Stage control parameters - allow skipping individual stages
+        booleanParam(name: 'RUN_TESTS', defaultValue: true,
+            description: 'Run code quality checks and tests')
+        booleanParam(name: 'BUILD_DOCKER', defaultValue: true,
+            description: 'Build Docker images')
+        booleanParam(name: 'PUSH_DOCKER', defaultValue: true,
+            description: 'Push Docker images to registry')
+        booleanParam(name: 'DEPLOY_INFRASTRUCTURE', defaultValue: true,
+            description: 'Deploy Kubernetes infrastructure (PostgreSQL, MLflow, Prometheus, Grafana)')
+        booleanParam(name: 'DEPLOY_KUBEFLOW', defaultValue: true,
+            description: 'Deploy Kubeflow Pipelines')
+        booleanParam(name: 'RUN_TRAINING', defaultValue: true,
+            description: 'Run ML training pipeline')
+        booleanParam(name: 'DEPLOY_MODELS', defaultValue: true,
+            description: 'Deploy models with KServe')
+        booleanParam(name: 'RUN_E2E_TESTS', defaultValue: true,
+            description: 'Run end-to-end tests')
+        booleanParam(name: 'GENERATE_REPORTS', defaultValue: true,
+            description: 'Generate deployment reports')
+    }
+
     environment {
         // System PATH - include paths for Docker, kubectl, helm on macOS
         PATH = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:${env.PATH}"
@@ -68,6 +90,9 @@ pipeline {
         // Stage 1: Code Quality & Testing
         // =====================================================================
         stage('Code Quality & Testing') {
+            when {
+                expression { params.RUN_TESTS }
+            }
             steps {
                 script {
                     printStageHeader('CODE QUALITY & TESTING')
@@ -181,6 +206,9 @@ pipeline {
         // Stage 2: Build Docker Images
         // =====================================================================
         stage('Build Docker Images') {
+            when {
+                expression { params.BUILD_DOCKER }
+            }
             steps {
                 script {
                     printStageHeader('BUILD DOCKER IMAGES')
@@ -250,6 +278,9 @@ pipeline {
         // Stage 3: Push to Docker Registry
         // =====================================================================
         stage('Push to Docker Registry') {
+            when {
+                expression { params.PUSH_DOCKER }
+            }
             steps {
                 script {
                     printStageHeader('PUSH TO DOCKER REGISTRY')
@@ -299,6 +330,9 @@ pipeline {
         // Stage 4: Deploy Infrastructure (Kubernetes)
         // =====================================================================
         stage('Deploy Infrastructure') {
+            when {
+                expression { params.DEPLOY_INFRASTRUCTURE }
+            }
             steps {
                 script {
                     printStageHeader('DEPLOY INFRASTRUCTURE')
@@ -412,6 +446,9 @@ pipeline {
         // Stage 5: Deploy Kubeflow Pipelines
         // =====================================================================
         stage('Deploy Kubeflow Pipelines') {
+            when {
+                expression { params.DEPLOY_KUBEFLOW }
+            }
             steps {
                 script {
                     printStageHeader('DEPLOY KUBEFLOW PIPELINES')
@@ -448,6 +485,9 @@ pipeline {
         // Stage 6: Run Training Pipeline
         // =====================================================================
         stage('Run Training Pipeline') {
+            when {
+                expression { params.RUN_TRAINING }
+            }
             steps {
                 script {
                     printStageHeader('RUN TRAINING PIPELINE')
@@ -580,6 +620,9 @@ PYTHON_SCRIPT
         // Stage 7: Deploy Models (KServe)
         // =====================================================================
         stage('Deploy Models') {
+            when {
+                expression { params.DEPLOY_MODELS }
+            }
             steps {
                 script {
                     printStageHeader('DEPLOY MODELS (KSERVE)')
@@ -628,6 +671,9 @@ PYTHON_SCRIPT
         // Stage 8: Run End-to-End Tests
         // =====================================================================
         stage('End-to-End Tests') {
+            when {
+                expression { params.RUN_E2E_TESTS }
+            }
             steps {
                 script {
                     printStageHeader('END-TO-END TESTS')
@@ -703,6 +749,9 @@ EOF
         // Stage 9: Generate Reports & Artifacts
         // =====================================================================
         stage('Generate Reports') {
+            when {
+                expression { params.GENERATE_REPORTS }
+            }
             steps {
                 script {
                     printStageHeader('GENERATE REPORTS')
