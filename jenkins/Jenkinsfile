@@ -134,7 +134,7 @@ pipeline {
                     ])
 
                     // Archive security report
-                    archiveArtifacts allowEmptyArchive: true, artifacts: 'bandit-report.json'
+                    // archiveArtifacts allowEmptyArchive: true, artifacts: 'bandit-report.json'
                 }
             }
         }
@@ -656,7 +656,7 @@ EOF
 
             post {
                 always {
-                    archiveArtifacts allowEmptyArchive: true, artifacts: 'load-test-results*.csv'
+                    // archiveArtifacts allowEmptyArchive: true, artifacts: 'load-test-results*.csv'
                 }
             }
         }
@@ -703,8 +703,8 @@ EOF
 
             post {
                 always {
-                    archiveArtifacts artifacts: 'deployment-summary.json'
-                    archiveArtifacts allowEmptyArchive: true, artifacts: 'coverage-html/**'
+                    // archiveArtifacts artifacts: 'deployment-summary.json'
+                    // archiveArtifacts allowEmptyArchive: true, artifacts: 'coverage-html/**'
                 }
             }
         }
