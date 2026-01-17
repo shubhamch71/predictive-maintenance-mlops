@@ -1,0 +1,289 @@
+# =============================================================================
+# PostgreSQL StatefulSet for MLflow Backend Store - FIXED VERSION
+# =============================================================================
+# Fixes applied:
+# 1. Added explicit storageClassName for PVC binding
+# 2. Removed runAsNonRoot conflict with init container
+# 3. Uses fsGroup for permission management instead of chown init container
+# 4. Added EKS compatibility with StorageClass selector
+# =============================================================================
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: mlflow
+type: Opaque
+data:
+  POSTGRES_USER: bWxmbG93
+  POSTGRES_PASSWORD: bWxmbG93X3Bhc3N3b3Jk
+  POSTGRES_DB: bWxmbG93ZGI=
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: postgres-config
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: mlflow
+data:
+  PGDATA: /var/lib/postgresql/data/pgdata
+  max_connections: "200"
+  shared_buffers: "256MB"
+  init.sql: |
+    -- Create MLflow database if not exists
+    SELECT 'CREATE DATABASE mlflowdb'
+    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'mlflowdb')\gexec
+
+    -- Grant privileges
+    GRANT ALL PRIVILEGES ON DATABASE mlflowdb TO mlflow;
+
+    -- Create extension for better performance
+    \c mlflowdb
+    CREATE EXTENSION IF NOT EXISTS pg_stat_statements;
+---
+# =============================================================================
+# StorageClass for Local Docker Desktop Kubernetes
+# =============================================================================
+# NOTE: Comment this out when deploying to EKS
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: postgres-storage
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/part-of: mlflow
+# For Docker Desktop - uses hostpath provisioner
+provisioner: docker.io/hostpath
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+---
+# =============================================================================
+# PostgreSQL StatefulSet - FIXED
+# =============================================================================
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: mlflow
+    app.kubernetes.io/version: "15"
+spec:
+  serviceName: postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: postgres
+      app.kubernetes.io/component: database
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: postgres
+        app.kubernetes.io/component: database
+        app.kubernetes.io/part-of: mlflow
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9187"
+    spec:
+      # =======================================================================
+      # FIX #1: Security Context - REMOVED runAsNonRoot
+      # =======================================================================
+      # The fsGroup ensures all mounted volumes are owned by GID 999
+      # This eliminates the need for the chown init container
+      securityContext:
+        fsGroup: 999
+        runAsUser: 999
+        # REMOVED: runAsNonRoot: true (was conflicting with init container)
+        # Instead, we rely on fsGroup for permissions
+
+      # =======================================================================
+      # FIX #2: Init Container - Alternative approach without root
+      # =======================================================================
+      # Option A: Remove init container entirely (fsGroup handles permissions)
+      # Option B: Keep init container but remove runAsNonRoot from pod level
+      # We're using Option A - fsGroup is sufficient for PostgreSQL
+      #
+      # If you MUST use init container, uncomment below and ensure no runAsNonRoot at pod level:
+      # initContainers:
+      #   - name: init-permissions
+      #     image: busybox:1.36
+      #     command: ['sh', '-c', 'chown -R 999:999 /var/lib/postgresql/data || true']
+      #     securityContext:
+      #       runAsUser: 0
+      #       runAsNonRoot: false
+      #     volumeMounts:
+      #       - name: postgres-data
+      #         mountPath: /var/lib/postgresql/data
+
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_DB
+            - name: PGDATA
+              valueFrom:
+                configMapKeyRef:
+                  name: postgres-config
+                  key: PGDATA
+
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1"
+              memory: "2Gi"
+
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+            - name: init-scripts
+              mountPath: /docker-entrypoint-initdb.d
+
+          livenessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - mlflow
+                - -d
+                - mlflowdb
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+
+          readinessProbe:
+            exec:
+              command:
+                - pg_isready
+                - -U
+                - mlflow
+                - -d
+                - mlflowdb
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+
+      volumes:
+        - name: init-scripts
+          configMap:
+            name: postgres-config
+            items:
+              - key: init.sql
+                path: init.sql
+
+      terminationGracePeriodSeconds: 30
+
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/name
+                      operator: In
+                      values:
+                        - postgres
+                topologyKey: kubernetes.io/hostname
+
+  # ===========================================================================
+  # FIX #3: Volume Claim Templates - EXPLICIT storageClassName
+  # ===========================================================================
+  volumeClaimTemplates:
+    - metadata:
+        name: postgres-data
+        labels:
+          app.kubernetes.io/name: postgres
+          app.kubernetes.io/component: database
+          app.kubernetes.io/part-of: mlflow
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        # FIX: Explicitly specify storageClassName
+        # For Docker Desktop: use 'hostpath' or 'postgres-storage' (defined above)
+        # For EKS: use 'gp3' or 'gp2'
+        storageClassName: hostpath
+        resources:
+          requests:
+            storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: mlflow
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-headless
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+    app.kubernetes.io/part-of: mlflow
+spec:
+  type: ClusterIP
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: postgres
+    app.kubernetes.io/component: database
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+      protocol: TCP

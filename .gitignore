@@ -80,3 +80,5 @@ htmlcov/
 # Kubernetes secrets
 *-secret.yaml
 *-secrets.yaml
+
+docs/INFRASTRUCTURE_ANALYSIS.md

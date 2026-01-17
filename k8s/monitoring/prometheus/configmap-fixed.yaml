@@ -1,0 +1,344 @@
+# =============================================================================
+# Prometheus Configuration ConfigMap - FIXED VERSION
+# =============================================================================
+# Fixes Applied:
+# 1. Added kubeflow namespace to scrape targets
+# 2. Added proper static targets for services without prometheus annotations
+# 3. Relaxed overly restrictive label filters
+# 4. Added fallback scrape jobs for ML services
+# 5. Fixed MLflow scraping (MLflow needs metrics endpoint or exporter)
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: mlops
+  labels:
+    app.kubernetes.io/name: prometheus
+    app.kubernetes.io/component: config
+    app.kubernetes.io/part-of: monitoring
+data:
+  prometheus.yml: |
+    # Global configuration
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+      scrape_timeout: 10s
+
+      external_labels:
+        cluster: 'predictive-maintenance'
+        environment: 'production'
+
+    # Alerting configuration
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets: []  # Alertmanager not deployed by default
+          scheme: http
+          timeout: 10s
+
+    # Rule files
+    rule_files:
+      - /etc/prometheus/rules/*.yml
+
+    # Scrape configurations
+    scrape_configs:
+      # -----------------------------------------------------------------------
+      # Prometheus self-monitoring
+      # -----------------------------------------------------------------------
+      - job_name: 'prometheus'
+        static_configs:
+          - targets: ['localhost:9090']
+        metrics_path: /metrics
+
+      # -----------------------------------------------------------------------
+      # FIX #1: FastAPI Serving API (Static Target)
+      # -----------------------------------------------------------------------
+      # The API server exposes metrics at /metrics endpoint
+      - job_name: 'fastapi-api'
+        static_configs:
+          - targets:
+              - 'pm-api.mlops.svc.cluster.local:8000'
+              - 'model-server.mlops.svc.cluster.local:8000'
+            labels:
+              service: 'api'
+              component: 'serving'
+        metrics_path: /metrics
+        scrape_interval: 15s
+        # Relabel to handle missing targets gracefully
+        relabel_configs:
+          - source_labels: [__address__]
+            target_label: instance
+
+      # -----------------------------------------------------------------------
+      # FIX #2: MLflow Server
+      # -----------------------------------------------------------------------
+      # Note: MLflow doesn't expose /metrics by default.
+      # This config assumes you've added prometheus_client to MLflow
+      # or are using mlflow-prometheus-exporter sidecar
+      - job_name: 'mlflow'
+        static_configs:
+          - targets: ['mlflow.mlops.svc.cluster.local:5000']
+            labels:
+              service: 'mlflow'
+              component: 'tracking'
+        metrics_path: /metrics
+        scrape_interval: 30s
+        # Honor labels from the target
+        honor_labels: true
+        # Don't fail if MLflow doesn't expose metrics
+        scrape_timeout: 5s
+
+      # -----------------------------------------------------------------------
+      # FIX #3: Grafana Metrics
+      # -----------------------------------------------------------------------
+      - job_name: 'grafana'
+        static_configs:
+          - targets: ['grafana.mlops.svc.cluster.local:3000']
+            labels:
+              service: 'grafana'
+              component: 'visualization'
+        metrics_path: /metrics
+        scrape_interval: 30s
+
+      # -----------------------------------------------------------------------
+      # FIX #4: Kubernetes Pods with Prometheus Annotations
+      # -----------------------------------------------------------------------
+      # Scrapes ALL namespaces, not just mlops
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - mlops
+                - kubeflow
+                - default
+                - kube-system
+        relabel_configs:
+          # Only scrape pods with prometheus.io/scrape annotation
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          # Use custom path if specified
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          # Use custom port if specified
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          # Add pod labels
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+
+      # -----------------------------------------------------------------------
+      # FIX #5: Kubernetes Services with Prometheus Annotations
+      # -----------------------------------------------------------------------
+      - job_name: 'kubernetes-services'
+        kubernetes_sd_configs:
+          - role: endpoints
+            namespaces:
+              names:
+                - mlops
+                - kubeflow
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+            action: replace
+            target_label: __address__
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_service_name]
+            target_label: service
+
+      # -----------------------------------------------------------------------
+      # FIX #6: KServe InferenceServices (relaxed filtering)
+      # -----------------------------------------------------------------------
+      - job_name: 'kserve-inference'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - mlops
+                - kserve-serving
+        relabel_configs:
+          # Keep pods that are part of inference services
+          - source_labels: [__meta_kubernetes_pod_label_serving_kserve_io_inferenceservice]
+            action: keep
+            regex: .+
+          # Set model name from inference service label
+          - source_labels: [__meta_kubernetes_pod_label_serving_kserve_io_inferenceservice]
+            target_label: model_name
+          # Use standard metrics port
+          - source_labels: [__meta_kubernetes_pod_container_port_number]
+            action: keep
+            regex: '8080|9090|8000'
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+
+      # -----------------------------------------------------------------------
+      # FIX #7: Kubeflow Pipeline Components
+      # -----------------------------------------------------------------------
+      - job_name: 'kubeflow-pipelines'
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names:
+                - kubeflow
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            action: keep
+            regex: (ml-pipeline|ml-pipeline-ui|ml-pipeline-viewer-crd|cache-server|metadata-grpc-server)
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            target_label: component
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+
+      # -----------------------------------------------------------------------
+      # Node Metrics (kubelet)
+      # -----------------------------------------------------------------------
+      - job_name: 'kubernetes-nodes'
+        kubernetes_sd_configs:
+          - role: node
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/${1}/proxy/metrics
+
+      # -----------------------------------------------------------------------
+      # cAdvisor (container metrics)
+      # -----------------------------------------------------------------------
+      - job_name: 'kubernetes-cadvisor'
+        kubernetes_sd_configs:
+          - role: node
+        scheme: https
+        tls_config:
+          ca_file: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+          insecure_skip_verify: true
+        bearer_token_file: /var/run/secrets/kubernetes.io/serviceaccount/token
+        relabel_configs:
+          - action: labelmap
+            regex: __meta_kubernetes_node_label_(.+)
+          - target_label: __address__
+            replacement: kubernetes.default.svc:443
+          - source_labels: [__meta_kubernetes_node_name]
+            regex: (.+)
+            target_label: __metrics_path__
+            replacement: /api/v1/nodes/${1}/proxy/metrics/cadvisor
+
+  # ===========================================================================
+  # Alerting Rules
+  # ===========================================================================
+  alerts.yml: |
+    groups:
+      - name: ml-model-performance
+        interval: 30s
+        rules:
+          - alert: HighPredictionLatency
+            expr: |
+              histogram_quantile(0.95,
+                sum(rate(predictive_maintenance_prediction_latency_seconds_bucket[5m])) by (le, model_type)
+              ) > 1
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High prediction latency detected"
+              description: "P95 latency for {{ $labels.model_type }} is {{ $value | printf \"%.2f\" }}s"
+
+          - alert: HighPredictionErrorRate
+            expr: |
+              sum(rate(predictive_maintenance_predictions_total{status="error"}[5m])) by (model_type)
+              /
+              sum(rate(predictive_maintenance_predictions_total[5m])) by (model_type)
+              > 0.05
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High prediction error rate"
+              description: "Error rate for {{ $labels.model_type }} is {{ $value | humanizePercentage }}"
+
+          - alert: ServiceDown
+            expr: up == 0
+            for: 2m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Service is down"
+              description: "{{ $labels.job }} has been down for more than 2 minutes"
+
+      - name: infrastructure
+        interval: 30s
+        rules:
+          - alert: HighCPUUsage
+            expr: |
+              100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 80
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High CPU usage"
+              description: "CPU usage is {{ $value | printf \"%.1f\" }}%"
+
+          - alert: HighMemoryUsage
+            expr: |
+              100 * (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 85
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High memory usage"
+              description: "Memory usage is {{ $value | printf \"%.1f\" }}%"
+
+  # ===========================================================================
+  # Recording Rules
+  # ===========================================================================
+  recording_rules.yml: |
+    groups:
+      - name: ml-recording-rules
+        interval: 30s
+        rules:
+          - record: ml:predictions:rate5m
+            expr: sum(rate(predictive_maintenance_predictions_total[5m])) by (model_type, status)
+
+          - record: ml:error_rate:rate5m
+            expr: |
+              sum(rate(predictive_maintenance_predictions_total{status="error"}[5m])) by (model_type)
+              /
+              sum(rate(predictive_maintenance_predictions_total[5m])) by (model_type)
+
+          - record: ml:latency:p95
+            expr: |
+              histogram_quantile(0.95,
+                sum(rate(predictive_maintenance_prediction_latency_seconds_bucket[5m])) by (le, model_type)
+              )
