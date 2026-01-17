@@ -99,23 +99,38 @@ pipeline {
                 }
 
                 // Setup Python virtual environment (requires Python 3.11)
-                sh '''
+                sh '''#!/bin/bash
+                    set -e
                     echo "\033[34m[INFO]\033[0m Setting up Python virtual environment..."
 
-                    # Ensure build dependencies are installed (cmake needed for llvmlite)
-                    if ! command -v cmake &> /dev/null; then
-                        echo "\033[34m[INFO]\033[0m Installing cmake..."
-                        brew install cmake || {
-                            echo "\033[31m[ERROR]\033[0m Failed to install cmake. Please install manually:"
-                            echo "  brew install cmake"
-                            exit 1
-                        }
+                    # Ensure Homebrew paths are in PATH for all commands including subprocesses
+                    export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+
+                    # Install cmake if not available (required for llvmlite if no pre-built wheel)
+                    echo "\033[34m[INFO]\033[0m Checking for cmake..."
+                    if ! which cmake > /dev/null 2>&1; then
+                        echo "\033[34m[INFO]\033[0m Installing cmake via Homebrew..."
+                        if [ -f "/opt/homebrew/bin/brew" ]; then
+                            /opt/homebrew/bin/brew install cmake
+                        elif [ -f "/usr/local/bin/brew" ]; then
+                            /usr/local/bin/brew install cmake
+                        else
+                            echo "\033[33m[WARN]\033[0m Homebrew not found, cmake may need manual installation"
+                        fi
                     fi
-                    echo "\033[34m[INFO]\033[0m cmake version: $(cmake --version | head -1)"
+
+                    # Verify cmake location and add to PATH
+                    CMAKE_PATH=$(which cmake 2>/dev/null || echo "")
+                    if [ -n "$CMAKE_PATH" ]; then
+                        echo "\033[34m[INFO]\033[0m cmake found at: $CMAKE_PATH"
+                        echo "\033[34m[INFO]\033[0m cmake version: $(cmake --version | head -1)"
+                    else
+                        echo "\033[33m[WARN]\033[0m cmake not found - will rely on pre-built wheels only"
+                    fi
 
                     # Find Python 3.11 - required for TensorFlow compatibility
-                    if command -v python3.11 &> /dev/null; then
-                        PYTHON_BIN="python3.11"
+                    if which python3.11 > /dev/null 2>&1; then
+                        PYTHON_BIN=$(which python3.11)
                     elif [ -f "/opt/homebrew/bin/python3.11" ]; then
                         PYTHON_BIN="/opt/homebrew/bin/python3.11"
                     elif [ -f "/usr/local/bin/python3.11" ]; then
@@ -129,18 +144,29 @@ pipeline {
                     echo "\033[34m[INFO]\033[0m Using Python: $PYTHON_BIN"
                     $PYTHON_BIN --version
 
+                    # Create virtual environment
                     $PYTHON_BIN -m venv ${VENV_PATH}
                     . ${VENV_PATH}/bin/activate
+
+                    # Ensure PATH is preserved in venv
+                    export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+
                     pip install --upgrade pip wheel setuptools
 
-                    # Install pre-built wheels for problematic packages first
-                    pip install --only-binary=:all: llvmlite numba || {
-                        echo "\033[33m[WARN]\033[0m Pre-built wheels not available, building from source..."
-                        pip install llvmlite numba
+                    # Install llvmlite and numba with specific versions that have pre-built wheels
+                    # Force only binary to avoid source builds
+                    echo "\033[34m[INFO]\033[0m Installing llvmlite and numba (pre-built wheels)..."
+                    pip install "llvmlite==0.42.0" "numba==0.59.1" --prefer-binary || {
+                        echo "\033[34m[INFO]\033[0m Trying alternative installation method..."
+                        pip install llvmlite==0.42.0 --no-build-isolation
+                        pip install numba==0.59.1 --no-build-isolation
                     }
 
+                    echo "\033[34m[INFO]\033[0m Installing requirements..."
                     pip install -r requirements.txt
                     pip install -r requirements-dev.txt
+
+                    echo "\033[32m[SUCCESS]\033[0m Dependencies installed successfully"
                 '''
 
                 // Run linting with flake8
