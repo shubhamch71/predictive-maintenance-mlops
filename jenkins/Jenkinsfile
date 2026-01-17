@@ -654,11 +654,11 @@ EOF
                 '''
             }
 
-            post {
-                always {
-                    // archiveArtifacts allowEmptyArchive: true, artifacts: 'load-test-results*.csv'
-                }
-            }
+            // post {
+            //     always {
+            //         archiveArtifacts allowEmptyArchive: true, artifacts: 'load-test-results*.csv'
+            //     }
+            // }
         }
 
         // =====================================================================
@@ -701,12 +701,12 @@ EOF
                 '''
             }
 
-            post {
-                always {
-                    // archiveArtifacts artifacts: 'deployment-summary.json'
-                    // archiveArtifacts allowEmptyArchive: true, artifacts: 'coverage-html/**'
-                }
-            }
+            // post {
+            //     always {
+            //         archiveArtifacts artifacts: 'deployment-summary.json'
+            //         archiveArtifacts allowEmptyArchive: true, artifacts: 'coverage-html/**'
+            //     }
+            // }
         }
 
         // =====================================================================
