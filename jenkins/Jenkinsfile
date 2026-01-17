@@ -265,13 +265,10 @@ pipeline {
                     echo "\033[34m[INFO]\033[0m Build number: ${BUILD_NUMBER}"
                 }
 
-                // Build training image
+                // Build training image (tagged with commit hash only)
                 sh '''
                     echo "\033[34m[INFO]\033[0m Building training image..."
                     docker build \
-                        -t ${TRAINING_IMAGE}:latest \
-                        -t ${TRAINING_IMAGE}:${VERSION} \
-                        -t ${TRAINING_IMAGE}:${BUILD_NUMBER} \
                         -t ${TRAINING_IMAGE}:${GIT_COMMIT_SHORT} \
                         -f docker/training/Dockerfile \
                         --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
@@ -280,13 +277,10 @@ pipeline {
                         .
                 '''
 
-                // Build serving image
+                // Build serving image (tagged with commit hash only)
                 sh '''
                     echo "\033[34m[INFO]\033[0m Building serving image..."
                     docker build \
-                        -t ${SERVING_IMAGE}:latest \
-                        -t ${SERVING_IMAGE}:${VERSION} \
-                        -t ${SERVING_IMAGE}:${BUILD_NUMBER} \
                         -t ${SERVING_IMAGE}:${GIT_COMMIT_SHORT} \
                         -f docker/serving/Dockerfile \
                         --build-arg BUILD_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ") \
@@ -305,8 +299,8 @@ pipeline {
                 sh '''
                     if command -v trivy &> /dev/null; then
                         echo "\033[34m[INFO]\033[0m Scanning images for vulnerabilities..."
-                        trivy image --severity HIGH,CRITICAL ${TRAINING_IMAGE}:latest || true
-                        trivy image --severity HIGH,CRITICAL ${SERVING_IMAGE}:latest || true
+                        trivy image --severity HIGH,CRITICAL ${TRAINING_IMAGE}:${GIT_COMMIT_SHORT} || true
+                        trivy image --severity HIGH,CRITICAL ${SERVING_IMAGE}:${GIT_COMMIT_SHORT} || true
                     else
                         echo "\033[33m[WARN]\033[0m Trivy not installed, skipping vulnerability scan"
                     fi
@@ -348,30 +342,20 @@ pipeline {
                         echo "${DOCKER_HUB_PASS}" | docker login -u "${DOCKER_HUB_USER}" --password-stdin
                         set -x
 
-                        echo "\033[34m[INFO]\033[0m Pushing training image..."
-                        docker push ${TRAINING_IMAGE}:latest
-                        docker push ${TRAINING_IMAGE}:${VERSION}
-                        docker push ${TRAINING_IMAGE}:${BUILD_NUMBER}
+                        echo "\033[34m[INFO]\033[0m Pushing training image: ${TRAINING_IMAGE}:${GIT_COMMIT_SHORT}"
                         docker push ${TRAINING_IMAGE}:${GIT_COMMIT_SHORT}
 
-                        echo "\033[34m[INFO]\033[0m Pushing serving image..."
-                        docker push ${SERVING_IMAGE}:latest
-                        docker push ${SERVING_IMAGE}:${VERSION}
-                        docker push ${SERVING_IMAGE}:${BUILD_NUMBER}
+                        echo "\033[34m[INFO]\033[0m Pushing serving image: ${SERVING_IMAGE}:${GIT_COMMIT_SHORT}"
                         docker push ${SERVING_IMAGE}:${GIT_COMMIT_SHORT}
 
                         echo "\033[34m[INFO]\033[0m Verifying pushed images..."
-                        docker manifest inspect ${TRAINING_IMAGE}:latest > /dev/null
-                        docker manifest inspect ${SERVING_IMAGE}:latest > /dev/null
+                        docker manifest inspect ${TRAINING_IMAGE}:${GIT_COMMIT_SHORT} > /dev/null
+                        docker manifest inspect ${SERVING_IMAGE}:${GIT_COMMIT_SHORT} > /dev/null
 
                         echo "\033[32m[SUCCESS]\033[0m All images pushed successfully"
 
                         echo "\033[34m[INFO]\033[0m Logging out from Docker Hub..."
                         docker logout
-
-                        echo "\033[34m[INFO]\033[0m Cleaning up local images..."
-                        docker rmi ${TRAINING_IMAGE}:${BUILD_NUMBER} || true
-                        docker rmi ${SERVING_IMAGE}:${BUILD_NUMBER} || true
                     '''
                 }
             }
