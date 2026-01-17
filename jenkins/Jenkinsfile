@@ -77,6 +77,17 @@ pipeline {
                 sh '''
                     echo "\033[34m[INFO]\033[0m Setting up Python virtual environment..."
 
+                    # Ensure build dependencies are installed (cmake needed for llvmlite)
+                    if ! command -v cmake &> /dev/null; then
+                        echo "\033[34m[INFO]\033[0m Installing cmake..."
+                        brew install cmake || {
+                            echo "\033[31m[ERROR]\033[0m Failed to install cmake. Please install manually:"
+                            echo "  brew install cmake"
+                            exit 1
+                        }
+                    fi
+                    echo "\033[34m[INFO]\033[0m cmake version: $(cmake --version | head -1)"
+
                     # Find Python 3.11 - required for TensorFlow compatibility
                     if command -v python3.11 &> /dev/null; then
                         PYTHON_BIN="python3.11"
@@ -95,7 +106,14 @@ pipeline {
 
                     $PYTHON_BIN -m venv ${VENV_PATH}
                     . ${VENV_PATH}/bin/activate
-                    pip install --upgrade pip wheel
+                    pip install --upgrade pip wheel setuptools
+
+                    # Install pre-built wheels for problematic packages first
+                    pip install --only-binary=:all: llvmlite numba || {
+                        echo "\033[33m[WARN]\033[0m Pre-built wheels not available, building from source..."
+                        pip install llvmlite numba
+                    }
+
                     pip install -r requirements.txt
                     pip install -r requirements-dev.txt
                 '''
