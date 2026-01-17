@@ -31,6 +31,9 @@ pipeline {
     }
 
     environment {
+        // System PATH - include paths for Docker, kubectl, helm on macOS
+        PATH = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:${env.PATH}"
+
         // Project configuration
         PROJECT_NAME = 'predictive-maintenance'
         NAMESPACE = 'mlops'
