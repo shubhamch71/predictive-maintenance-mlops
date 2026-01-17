@@ -31,6 +31,10 @@ pipeline {
     }
 
     parameters {
+        // Docker Hub configuration
+        string(name: 'DOCKER_USERNAME', defaultValue: '',
+            description: 'Docker Hub username (required for build/push stages)')
+
         // Stage control parameters - allow skipping individual stages
         booleanParam(name: 'RUN_TESTS', defaultValue: true,
             description: 'Run code quality checks and tests')
@@ -62,8 +66,6 @@ pipeline {
 
         // Docker configuration
         DOCKER_REGISTRY = 'docker.io'
-        TRAINING_IMAGE = "${DOCKER_REGISTRY}/${DOCKER_USERNAME}/pm-training"
-        SERVING_IMAGE = "${DOCKER_REGISTRY}/${DOCKER_USERNAME}/pm-serving"
 
         // Service URLs (will be updated during deployment)
         MLFLOW_TRACKING_URI = 'http://localhost:5000'
@@ -239,6 +241,15 @@ pipeline {
                 script {
                     printStageHeader('BUILD DOCKER IMAGES')
 
+                    // Validate DOCKER_USERNAME is provided
+                    if (!params.DOCKER_USERNAME?.trim()) {
+                        error "DOCKER_USERNAME parameter is required for building Docker images. Please provide your Docker Hub username."
+                    }
+
+                    // Set image names using the parameter
+                    env.TRAINING_IMAGE = "${DOCKER_REGISTRY}/${params.DOCKER_USERNAME}/pm-training"
+                    env.SERVING_IMAGE = "${DOCKER_REGISTRY}/${params.DOCKER_USERNAME}/pm-serving"
+
                     // Read version from __version__.py
                     def version = sh(
                         script: '''python3 -c "exec(open('src/__version__.py').read()); print(__version__)"''',
@@ -246,6 +257,9 @@ pipeline {
                     ).trim()
                     env.VERSION = version
 
+                    echo "\033[34m[INFO]\033[0m Docker Username: ${params.DOCKER_USERNAME}"
+                    echo "\033[34m[INFO]\033[0m Training Image: ${env.TRAINING_IMAGE}"
+                    echo "\033[34m[INFO]\033[0m Serving Image: ${env.SERVING_IMAGE}"
                     echo "\033[34m[INFO]\033[0m Building version: ${version}"
                     echo "\033[34m[INFO]\033[0m Git commit: ${GIT_COMMIT_SHORT}"
                     echo "\033[34m[INFO]\033[0m Build number: ${BUILD_NUMBER}"
@@ -310,17 +324,28 @@ pipeline {
             steps {
                 script {
                     printStageHeader('PUSH TO DOCKER REGISTRY')
+
+                    // Validate DOCKER_USERNAME is provided
+                    if (!params.DOCKER_USERNAME?.trim()) {
+                        error "DOCKER_USERNAME parameter is required for pushing Docker images."
+                    }
+
+                    // Ensure image names are set (in case Build stage was skipped)
+                    if (!env.TRAINING_IMAGE) {
+                        env.TRAINING_IMAGE = "${DOCKER_REGISTRY}/${params.DOCKER_USERNAME}/pm-training"
+                        env.SERVING_IMAGE = "${DOCKER_REGISTRY}/${params.DOCKER_USERNAME}/pm-serving"
+                    }
                 }
 
                 withCredentials([usernamePassword(
                     credentialsId: 'dockerhub-credentials',
-                    usernameVariable: 'DOCKER_USERNAME',
-                    passwordVariable: 'DOCKER_PASSWORD'
+                    usernameVariable: 'DOCKER_HUB_USER',
+                    passwordVariable: 'DOCKER_HUB_PASS'
                 )]) {
                     sh '''
                         set +x
                         echo "\033[34m[INFO]\033[0m Logging in to Docker Hub..."
-                        echo "${DOCKER_PASSWORD}" | docker login -u "${DOCKER_USERNAME}" --password-stdin
+                        echo "${DOCKER_HUB_PASS}" | docker login -u "${DOCKER_HUB_USER}" --password-stdin
                         set -x
 
                         echo "\033[34m[INFO]\033[0m Pushing training image..."
