@@ -1,66 +1,65 @@
 # =============================================================================
 # Production Dependencies for Predictive Maintenance MLOps Platform
 # =============================================================================
-# All versions are pinned for reproducibility in production environments.
+# Versions are carefully selected to avoid dependency conflicts.
 #
-# Install: pip install -r requirements.txt
+# Key compatibility notes:
+# - evidently >=0.4.33 requires requests>=2.32.0 and pydantic>=2
+# - tensorflow 2.15.x requires numpy<2.0
+# - mlflow 2.9.x works with requests>=2.17.3,<3
+#
+# Install: pip install --no-cache-dir -r requirements.txt
 # =============================================================================
 
 # -----------------------------------------------------------------------------
 # Core Data Science Libraries
 # -----------------------------------------------------------------------------
-pandas==2.1.4                   # Data manipulation and analysis
-numpy==1.26.2                   # Numerical computing
-scipy==1.11.4                   # Scientific computing
+pandas>=2.0.0,<3.0.0
+numpy>=1.24.0,<2.0.0
+scipy>=1.11.0,<2.0.0
 
 # -----------------------------------------------------------------------------
 # Machine Learning Frameworks
 # -----------------------------------------------------------------------------
-scikit-learn==1.3.2             # Classical ML algorithms
-xgboost==2.0.3                  # Gradient boosting
-tensorflow==2.15.0              # Deep learning (LSTM models)
+scikit-learn>=1.3.0,<2.0.0
+xgboost>=2.0.0,<3.0.0
+tensorflow>=2.15.0,<2.17.0
 
 # -----------------------------------------------------------------------------
 # MLOps Tools
 # -----------------------------------------------------------------------------
-mlflow==2.9.2                   # Experiment tracking and model registry
-kfp==2.4.0                      # Kubeflow Pipelines SDK
+mlflow>=2.9.0,<3.0.0
+kfp>=2.4.0,<3.0.0
 
 # -----------------------------------------------------------------------------
 # API & Model Serving
 # -----------------------------------------------------------------------------
-fastapi==0.109.0                # High-performance API framework
-uvicorn[standard]==0.27.0       # ASGI server with uvloop
-pydantic==2.5.3                 # Data validation
-python-multipart==0.0.6         # File upload support
+fastapi>=0.109.0,<1.0.0
+uvicorn[standard]>=0.27.0,<1.0.0
+pydantic>=2.5.0,<3.0.0
+python-multipart>=0.0.6,<1.0.0
 
 # -----------------------------------------------------------------------------
 # Monitoring & Observability
 # -----------------------------------------------------------------------------
-prometheus-client==0.19.0       # Prometheus metrics exporter
-evidently==0.4.33               # ML model monitoring and drift detection (pydantic v2 compatible)
+prometheus-client>=0.19.0,<1.0.0
+evidently>=0.4.33,<0.5.0
 
 # -----------------------------------------------------------------------------
 # Model Explainability
 # -----------------------------------------------------------------------------
-shap==0.44.1                    # SHAP values for model interpretation
+shap>=0.44.0,<0.46.0
 
 # -----------------------------------------------------------------------------
 # Cloud & Infrastructure
 # -----------------------------------------------------------------------------
-boto3==1.34.14                  # AWS SDK for S3 artifact storage
-opensearch-py==2.4.2            # OpenSearch client for logging
+boto3>=1.34.0,<2.0.0
+opensearch-py>=2.4.0,<3.0.0
 
 # -----------------------------------------------------------------------------
-# LLM Integration (Optional - for advanced features)
+# Utilities (requests MUST be >=2.32.0 for evidently compatibility)
 # -----------------------------------------------------------------------------
-langchain==0.1.0                # LLM framework
-langchain-aws==0.1.0            # AWS Bedrock integration
-
-# -----------------------------------------------------------------------------
-# Utilities
-# -----------------------------------------------------------------------------
-python-dotenv==1.0.0            # Environment variable management
-pyyaml==6.0.1                   # YAML configuration parsing
-requests==2.31.0                # HTTP client
-joblib==1.3.2                   # Model serialization
+python-dotenv>=1.0.0,<2.0.0
+pyyaml>=6.0.0,<7.0.0
+requests>=2.32.0,<3.0.0
+joblib>=1.3.0,<2.0.0
