@@ -1,0 +1,49 @@
+# =============================================================================
+# Kubernetes & MLOps Tools Dependencies
+# =============================================================================
+# Tools for deploying and managing the platform on Kubernetes.
+#
+# Install: pip install -r requirements-k8s.txt
+#
+# Note: kubectl and helm must be installed separately as system packages.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Kubeflow Pipelines
+# -----------------------------------------------------------------------------
+kfp==2.4.0                      # Kubeflow Pipelines SDK
+kfp-kubernetes==1.0.0           # Kubernetes components for KFP
+
+# -----------------------------------------------------------------------------
+# KServe Model Serving
+# -----------------------------------------------------------------------------
+kserve==0.12.0                  # KServe SDK for model deployment
+
+# -----------------------------------------------------------------------------
+# Kubernetes Python Client
+# -----------------------------------------------------------------------------
+kubernetes==28.1.0              # Official Kubernetes Python client
+
+# -----------------------------------------------------------------------------
+# Installation Notes for System Tools
+# -----------------------------------------------------------------------------
+# kubectl (Kubernetes CLI):
+#   macOS:   brew install kubectl
+#   Ubuntu:  snap install kubectl --classic
+#   Windows: choco install kubernetes-cli
+#
+# helm (Kubernetes Package Manager):
+#   macOS:   brew install helm
+#   Ubuntu:  snap install helm --classic
+#   Windows: choco install kubernetes-helm
+#
+# kustomize (Kubernetes Configuration Management):
+#   macOS:   brew install kustomize
+#   Ubuntu:  snap install kustomize
+#   Windows: choco install kustomize
+#
+# Verify installations:
+#   kubectl version --client
+#   helm version
+#   kustomize version
+# =============================================================================

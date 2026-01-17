@@ -1,0 +1,164 @@
+# =============================================================================
+# Docker Compose Override for CI/CD Environment
+# =============================================================================
+#
+# This file extends docker-compose.yml with CI/CD specific configurations:
+# - Uses specific image tags instead of building
+# - Stricter healthchecks
+# - Resource limits
+# - Disabled restart policies
+#
+# Usage:
+#   docker-compose -f docker-compose.yml -f docker-compose.ci.yml up -d
+#
+# =============================================================================
+
+version: '3.8'
+
+services:
+  # ===========================================================================
+  # PostgreSQL - CI Configuration
+  # ===========================================================================
+  postgres:
+    # Use fixed version for reproducibility
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: mlflow
+      POSTGRES_PASSWORD: mlflow
+      POSTGRES_DB: mlflow
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mlflow -d mlflow"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    # Disable restart in CI - want fast failures
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+  # ===========================================================================
+  # MLflow - CI Configuration
+  # ===========================================================================
+  mlflow:
+    # Use pre-built image instead of building
+    image: ${DOCKER_REGISTRY:-docker.io}/${DOCKER_USERNAME:-local}/pm-mlflow:${VERSION:-latest}
+    build:
+      context: ./docker/mlflow
+      dockerfile: Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      MLFLOW_BACKEND_STORE_URI: postgresql://mlflow:mlflow@postgres:5432/mlflow
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: /mlflow/artifacts
+      ENVIRONMENT: ci
+    # No volume mounts in CI - use baked-in code
+    volumes: []
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+
+  # ===========================================================================
+  # API Service - CI Configuration
+  # ===========================================================================
+  api:
+    # Use pre-built image
+    image: ${DOCKER_REGISTRY:-docker.io}/${DOCKER_USERNAME:-local}/pm-serving:${VERSION:-latest}
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MODEL_NAME: predictive-maintenance
+      MODEL_VERSION: production
+      ENVIRONMENT: ci
+    # No volume mounts in CI
+    volumes: []
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+
+  # ===========================================================================
+  # Prometheus - CI Configuration
+  # ===========================================================================
+  prometheus:
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+  # ===========================================================================
+  # Grafana - CI Configuration
+  # ===========================================================================
+  grafana:
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+      ENVIRONMENT: ci
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 128M
+
+# No volume persistence in CI
+volumes:
+  postgres-data:
+    driver: local
+  mlflow-artifacts:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local

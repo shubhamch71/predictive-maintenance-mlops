@@ -1,0 +1,70 @@
+# =============================================================================
+# Development Dependencies for Predictive Maintenance MLOps Platform
+# =============================================================================
+# Install all production dependencies plus development tools.
+#
+# Install: pip install -r requirements-dev.txt
+# =============================================================================
+
+# Include production dependencies
+-r requirements.txt
+
+# -----------------------------------------------------------------------------
+# Testing Framework
+# -----------------------------------------------------------------------------
+pytest==7.4.4                   # Test framework
+pytest-cov==4.1.0               # Coverage plugin for pytest
+pytest-asyncio==0.23.3          # Async test support
+pytest-mock==3.12.0             # Mocking utilities
+pytest-xdist==3.5.0             # Parallel test execution
+httpx==0.26.0                   # Async HTTP client for FastAPI testing
+
+# -----------------------------------------------------------------------------
+# Code Quality
+# -----------------------------------------------------------------------------
+black==23.12.1                  # Code formatter
+flake8==7.0.0                   # Linter
+flake8-docstrings==1.7.0        # Docstring linting
+isort==5.13.2                   # Import sorting
+pylint==3.0.3                   # Static code analysis
+
+# -----------------------------------------------------------------------------
+# Type Checking
+# -----------------------------------------------------------------------------
+mypy==1.8.0                     # Static type checker
+types-requests==2.31.0.20240106 # Type stubs for requests
+types-PyYAML==6.0.12.12         # Type stubs for PyYAML
+
+# -----------------------------------------------------------------------------
+# Security Scanning
+# -----------------------------------------------------------------------------
+bandit==1.7.7                   # Security vulnerability scanner
+safety==2.3.5                   # Dependency vulnerability checker
+
+# -----------------------------------------------------------------------------
+# Pre-commit Hooks
+# -----------------------------------------------------------------------------
+pre-commit==3.6.0               # Git hooks framework
+
+# -----------------------------------------------------------------------------
+# Documentation
+# -----------------------------------------------------------------------------
+mkdocs==1.5.3                   # Documentation generator
+mkdocs-material==9.5.4          # Material theme for mkdocs
+
+# -----------------------------------------------------------------------------
+# Interactive Development
+# -----------------------------------------------------------------------------
+ipython==8.20.0                 # Enhanced Python shell
+jupyter==1.0.0                  # Jupyter notebooks
+notebook==7.0.6                 # Jupyter notebook server
+
+# -----------------------------------------------------------------------------
+# Load Testing
+# -----------------------------------------------------------------------------
+locust==2.20.1                  # Load testing framework
+
+# -----------------------------------------------------------------------------
+# Debugging
+# -----------------------------------------------------------------------------
+debugpy==1.8.0                  # Debug adapter for VS Code

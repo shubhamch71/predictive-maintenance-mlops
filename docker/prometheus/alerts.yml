@@ -1,0 +1,37 @@
+# =============================================================================
+# Prometheus Alert Rules for MLOps Platform
+# =============================================================================
+
+groups:
+  - name: ml-model-performance
+    interval: 30s
+    rules:
+      - alert: HighPredictionLatency
+        expr: histogram_quantile(0.95, sum(rate(prediction_latency_seconds_bucket[5m])) by (le)) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High prediction latency detected"
+          description: "P95 latency is {{ $value | printf \"%.2f\" }}s (threshold: 1s)"
+
+      - alert: HighErrorRate
+        expr: sum(rate(predictions_total{status="error"}[5m])) / sum(rate(predictions_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High prediction error rate"
+          description: "Error rate is {{ $value | humanizePercentage }}"
+
+  - name: infrastructure
+    interval: 30s
+    rules:
+      - alert: ServiceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Service {{ $labels.job }} is down"
+          description: "{{ $labels.instance }} has been down for more than 1 minute"
