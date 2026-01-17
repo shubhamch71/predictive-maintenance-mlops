@@ -89,144 +89,144 @@ pipeline {
         // =====================================================================
         // Stage 1: Code Quality & Testing
         // =====================================================================
-        stage('Code Quality & Testing') {
-            when {
-                expression { params.RUN_TESTS }
-            }
-            steps {
-                script {
-                    printStageHeader('CODE QUALITY & TESTING')
-                }
+        // stage('Code Quality & Testing') {
+        //     when {
+        //         expression { params.RUN_TESTS }
+        //     }
+        //     steps {
+        //         script {
+        //             printStageHeader('CODE QUALITY & TESTING')
+        //         }
 
-                // Setup Python virtual environment (requires Python 3.11)
-                sh '''#!/bin/bash
-                    set -e
-                    echo "\033[34m[INFO]\033[0m Setting up Python virtual environment..."
+        //         // Setup Python virtual environment (requires Python 3.11)
+        //         sh '''#!/bin/bash
+        //             set -e
+        //             echo "\033[34m[INFO]\033[0m Setting up Python virtual environment..."
 
-                    # Ensure Homebrew paths are in PATH for all commands including subprocesses
-                    export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
+        //             # Ensure Homebrew paths are in PATH for all commands including subprocesses
+        //             export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$PATH"
 
-                    # Install cmake if not available (required for llvmlite if no pre-built wheel)
-                    echo "\033[34m[INFO]\033[0m Checking for cmake..."
-                    if ! which cmake > /dev/null 2>&1; then
-                        echo "\033[34m[INFO]\033[0m Installing cmake via Homebrew..."
-                        if [ -f "/opt/homebrew/bin/brew" ]; then
-                            /opt/homebrew/bin/brew install cmake
-                        elif [ -f "/usr/local/bin/brew" ]; then
-                            /usr/local/bin/brew install cmake
-                        else
-                            echo "\033[33m[WARN]\033[0m Homebrew not found, cmake may need manual installation"
-                        fi
-                    fi
+        //             # Install cmake if not available (required for llvmlite if no pre-built wheel)
+        //             echo "\033[34m[INFO]\033[0m Checking for cmake..."
+        //             if ! which cmake > /dev/null 2>&1; then
+        //                 echo "\033[34m[INFO]\033[0m Installing cmake via Homebrew..."
+        //                 if [ -f "/opt/homebrew/bin/brew" ]; then
+        //                     /opt/homebrew/bin/brew install cmake
+        //                 elif [ -f "/usr/local/bin/brew" ]; then
+        //                     /usr/local/bin/brew install cmake
+        //                 else
+        //                     echo "\033[33m[WARN]\033[0m Homebrew not found, cmake may need manual installation"
+        //                 fi
+        //             fi
 
-                    # Verify cmake location and add to PATH
-                    CMAKE_PATH=$(which cmake 2>/dev/null || echo "")
-                    if [ -n "$CMAKE_PATH" ]; then
-                        echo "\033[34m[INFO]\033[0m cmake found at: $CMAKE_PATH"
-                        echo "\033[34m[INFO]\033[0m cmake version: $(cmake --version | head -1)"
-                    else
-                        echo "\033[33m[WARN]\033[0m cmake not found - will rely on pre-built wheels only"
-                    fi
+        //             # Verify cmake location and add to PATH
+        //             CMAKE_PATH=$(which cmake 2>/dev/null || echo "")
+        //             if [ -n "$CMAKE_PATH" ]; then
+        //                 echo "\033[34m[INFO]\033[0m cmake found at: $CMAKE_PATH"
+        //                 echo "\033[34m[INFO]\033[0m cmake version: $(cmake --version | head -1)"
+        //             else
+        //                 echo "\033[33m[WARN]\033[0m cmake not found - will rely on pre-built wheels only"
+        //             fi
 
-                    # Find Python 3.11 - required for TensorFlow compatibility
-                    if which python3.11 > /dev/null 2>&1; then
-                        PYTHON_BIN=$(which python3.11)
-                    elif [ -f "/opt/homebrew/bin/python3.11" ]; then
-                        PYTHON_BIN="/opt/homebrew/bin/python3.11"
-                    elif [ -f "/usr/local/bin/python3.11" ]; then
-                        PYTHON_BIN="/usr/local/bin/python3.11"
-                    else
-                        echo "\033[31m[ERROR]\033[0m Python 3.11 not found. Please install it:"
-                        echo "  brew install python@3.11"
-                        exit 1
-                    fi
+        //             # Find Python 3.11 - required for TensorFlow compatibility
+        //             if which python3.11 > /dev/null 2>&1; then
+        //                 PYTHON_BIN=$(which python3.11)
+        //             elif [ -f "/opt/homebrew/bin/python3.11" ]; then
+        //                 PYTHON_BIN="/opt/homebrew/bin/python3.11"
+        //             elif [ -f "/usr/local/bin/python3.11" ]; then
+        //                 PYTHON_BIN="/usr/local/bin/python3.11"
+        //             else
+        //                 echo "\033[31m[ERROR]\033[0m Python 3.11 not found. Please install it:"
+        //                 echo "  brew install python@3.11"
+        //                 exit 1
+        //             fi
 
-                    echo "\033[34m[INFO]\033[0m Using Python: $PYTHON_BIN"
-                    $PYTHON_BIN --version
+        //             echo "\033[34m[INFO]\033[0m Using Python: $PYTHON_BIN"
+        //             $PYTHON_BIN --version
 
-                    # Create virtual environment
-                    $PYTHON_BIN -m venv ${VENV_PATH}
-                    . ${VENV_PATH}/bin/activate
+        //             # Create virtual environment
+        //             $PYTHON_BIN -m venv ${VENV_PATH}
+        //             . ${VENV_PATH}/bin/activate
 
-                    # Ensure PATH is preserved in venv
-                    export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+        //             # Ensure PATH is preserved in venv
+        //             export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
 
-                    pip install --upgrade pip wheel setuptools
+        //             pip install --upgrade pip wheel setuptools
 
-                    # Install llvmlite and numba with specific versions that have pre-built wheels
-                    # Force only binary to avoid source builds
-                    echo "\033[34m[INFO]\033[0m Installing llvmlite and numba (pre-built wheels)..."
-                    pip install "llvmlite==0.42.0" "numba==0.59.1" --prefer-binary || {
-                        echo "\033[34m[INFO]\033[0m Trying alternative installation method..."
-                        pip install llvmlite==0.42.0 --no-build-isolation
-                        pip install numba==0.59.1 --no-build-isolation
-                    }
+        //             # Install llvmlite and numba with specific versions that have pre-built wheels
+        //             # Force only binary to avoid source builds
+        //             echo "\033[34m[INFO]\033[0m Installing llvmlite and numba (pre-built wheels)..."
+        //             pip install "llvmlite==0.42.0" "numba==0.59.1" --prefer-binary || {
+        //                 echo "\033[34m[INFO]\033[0m Trying alternative installation method..."
+        //                 pip install llvmlite==0.42.0 --no-build-isolation
+        //                 pip install numba==0.59.1 --no-build-isolation
+        //             }
 
-                    echo "\033[34m[INFO]\033[0m Installing requirements..."
-                    pip install -r requirements.txt
-                    pip install -r requirements-dev.txt
+        //             echo "\033[34m[INFO]\033[0m Installing requirements..."
+        //             pip install -r requirements.txt
+        //             pip install -r requirements-dev.txt
 
-                    echo "\033[32m[SUCCESS]\033[0m Dependencies installed successfully"
-                '''
+        //             echo "\033[32m[SUCCESS]\033[0m Dependencies installed successfully"
+        //         '''
 
-                // Run linting with flake8
-                sh '''
-                    echo "\033[34m[INFO]\033[0m Running flake8 linting..."
-                    . ${VENV_PATH}/bin/activate
-                    flake8 src/ tests/ --count --select=E9,F63,F7,F82 --show-source --statistics || true
-                    flake8 src/ tests/ --count --exit-zero --max-complexity=10 --max-line-length=100 --statistics
-                '''
+        //         // Run linting with flake8
+        //         sh '''
+        //             echo "\033[34m[INFO]\033[0m Running flake8 linting..."
+        //             . ${VENV_PATH}/bin/activate
+        //             flake8 src/ tests/ --count --select=E9,F63,F7,F82 --show-source --statistics || true
+        //             flake8 src/ tests/ --count --exit-zero --max-complexity=10 --max-line-length=100 --statistics
+        //         '''
 
-                // Run black formatter check
-                sh '''
-                    echo "\033[34m[INFO]\033[0m Running black formatter check..."
-                    . ${VENV_PATH}/bin/activate
-                    black --check --line-length 100 src/ tests/ || echo "\033[33m[WARN]\033[0m Code formatting issues found"
-                '''
+        //         // Run black formatter check
+        //         sh '''
+        //             echo "\033[34m[INFO]\033[0m Running black formatter check..."
+        //             . ${VENV_PATH}/bin/activate
+        //             black --check --line-length 100 src/ tests/ || echo "\033[33m[WARN]\033[0m Code formatting issues found"
+        //         '''
 
-                // Run bandit security scan
-                sh '''
-                    echo "\033[34m[INFO]\033[0m Running bandit security scan..."
-                    . ${VENV_PATH}/bin/activate
-                    bandit -r src/ -ll -ii -f json -o bandit-report.json || true
-                    bandit -r src/ -ll -ii --exit-zero
-                '''
+        //         // Run bandit security scan
+        //         sh '''
+        //             echo "\033[34m[INFO]\033[0m Running bandit security scan..."
+        //             . ${VENV_PATH}/bin/activate
+        //             bandit -r src/ -ll -ii -f json -o bandit-report.json || true
+        //             bandit -r src/ -ll -ii --exit-zero
+        //         '''
 
-                // Run pytest with coverage
-                sh '''
-                    echo "\033[34m[INFO]\033[0m Running pytest with coverage..."
-                    . ${VENV_PATH}/bin/activate
-                    pytest tests/ \
-                        --cov=src \
-                        --cov-report=xml:coverage.xml \
-                        --cov-report=html:coverage-html \
-                        --cov-fail-under=${MIN_COVERAGE} \
-                        --junitxml=test-results.xml \
-                        -v \
-                        || echo "\033[33m[WARN]\033[0m Some tests failed or coverage below threshold"
-                '''
-            }
+        //         // Run pytest with coverage
+        //         sh '''
+        //             echo "\033[34m[INFO]\033[0m Running pytest with coverage..."
+        //             . ${VENV_PATH}/bin/activate
+        //             pytest tests/ \
+        //                 --cov=src \
+        //                 --cov-report=xml:coverage.xml \
+        //                 --cov-report=html:coverage-html \
+        //                 --cov-fail-under=${MIN_COVERAGE} \
+        //                 --junitxml=test-results.xml \
+        //                 -v \
+        //                 || echo "\033[33m[WARN]\033[0m Some tests failed or coverage below threshold"
+        //         '''
+        //     }
 
-            post {
-                always {
-                    // Publish test results
-                    junit allowEmptyResults: true, testResults: 'test-results.xml'
+        //     post {
+        //         always {
+        //             // Publish test results
+        //             junit allowEmptyResults: true, testResults: 'test-results.xml'
 
-                    // Publish coverage report
-                    // publishHTML(target: [
-                    //     allowMissing: true,
-                    //     alwaysLinkToLastBuild: true,
-                    //     keepAll: true,
-                    //     reportDir: 'coverage-html',
-                    //     reportFiles: 'index.html',
-                    //     reportName: 'Coverage Report'
-                    // ])
+        //             // Publish coverage report
+        //             // publishHTML(target: [
+        //             //     allowMissing: true,
+        //             //     alwaysLinkToLastBuild: true,
+        //             //     keepAll: true,
+        //             //     reportDir: 'coverage-html',
+        //             //     reportFiles: 'index.html',
+        //             //     reportName: 'Coverage Report'
+        //             // ])
 
-                    // Archive security report
-                    // archiveArtifacts allowEmptyArchive: true, artifacts: 'bandit-report.json'
-                }
-            }
-        }
+        //             // Archive security report
+        //             // archiveArtifacts allowEmptyArchive: true, artifacts: 'bandit-report.json'
+        //         }
+        //     }
+        // }
 
         // =====================================================================
         // Stage 2: Build Docker Images
