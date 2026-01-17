@@ -73,10 +73,27 @@ pipeline {
                     printStageHeader('CODE QUALITY & TESTING')
                 }
 
-                // Setup Python virtual environment
+                // Setup Python virtual environment (requires Python 3.11)
                 sh '''
                     echo "\033[34m[INFO]\033[0m Setting up Python virtual environment..."
-                    python3 -m venv ${VENV_PATH}
+
+                    # Find Python 3.11 - required for TensorFlow compatibility
+                    if command -v python3.11 &> /dev/null; then
+                        PYTHON_BIN="python3.11"
+                    elif [ -f "/opt/homebrew/bin/python3.11" ]; then
+                        PYTHON_BIN="/opt/homebrew/bin/python3.11"
+                    elif [ -f "/usr/local/bin/python3.11" ]; then
+                        PYTHON_BIN="/usr/local/bin/python3.11"
+                    else
+                        echo "\033[31m[ERROR]\033[0m Python 3.11 not found. Please install it:"
+                        echo "  brew install python@3.11"
+                        exit 1
+                    fi
+
+                    echo "\033[34m[INFO]\033[0m Using Python: $PYTHON_BIN"
+                    $PYTHON_BIN --version
+
+                    $PYTHON_BIN -m venv ${VENV_PATH}
                     . ${VENV_PATH}/bin/activate
                     pip install --upgrade pip wheel
                     pip install -r requirements.txt
@@ -127,14 +144,14 @@ pipeline {
                     junit allowEmptyResults: true, testResults: 'test-results.xml'
 
                     // Publish coverage report
-                    publishHTML(target: [
-                        allowMissing: true,
-                        alwaysLinkToLastBuild: true,
-                        keepAll: true,
-                        reportDir: 'coverage-html',
-                        reportFiles: 'index.html',
-                        reportName: 'Coverage Report'
-                    ])
+                    // publishHTML(target: [
+                    //     allowMissing: true,
+                    //     alwaysLinkToLastBuild: true,
+                    //     keepAll: true,
+                    //     reportDir: 'coverage-html',
+                    //     reportFiles: 'index.html',
+                    //     reportName: 'Coverage Report'
+                    // ])
 
                     // Archive security report
                     // archiveArtifacts allowEmptyArchive: true, artifacts: 'bandit-report.json'
